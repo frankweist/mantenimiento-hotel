@@ -141,7 +141,7 @@ export default function App(){
     setState(prev=>({ ...prev, [room]:{ ...(prev[room]||{items:{},notes:""}), measures:(prev[room]?.measures||[]).filter((_,i)=>i!==idx) } }));
   }
   function resetRoom(room){
-    setState(prev=>({ ...prev, [room]:{ items:{}, notes:\"\", measures:[], overall:\"auto\" } }));
+    setState(prev=>({ ...prev, [room]:{ items:{}, notes:"", measures:[], overall:"auto" } }));
   }
 
   const filteredRooms = blockRooms.filter(n=>n.toString().includes(filter.trim()));
@@ -150,7 +150,7 @@ export default function App(){
     <div>
       <header class="container">
         <h1>Mantenimiento Hotel · Residences</h1>
-        <div class="kv">v1.0-rc3 · Plano con iconos · Barra de estado por bloque</div>
+        <div class="kv">v1.0-rc3a · Plano con iconos · Barra de estado por bloque</div>
       </header>
 
       ${!selBlock && html`
@@ -224,7 +224,7 @@ export default function App(){
         </main>
       `}
 
-      <footer class="container">v1.0-rc3 — Contraste, reinicio de habitación y barra de estado por bloque</footer>
+      <footer class="container">v1.0-rc3a — Contraste, reinicio y barra por bloque</footer>
     </div>
   `;
 }
@@ -278,9 +278,7 @@ function MeasureForm({ onAdd }){
     </select>
     <input placeholder="Medida (ej. 60x90 cm)" value=${medida} onInput=${e=>setMedida(e.target.value)} />
     <input placeholder="Detalle opcional" value=${detalle} onInput=${e=>setDetalle(e.target.value)} />
-    <button class=${can?"btn-primary":"btn-disabled"} disabled=${!can} onClick=${()=>{ on AddFix(onAdd, {tipo,medida,detalle:detalle||undefined}); setMedida(""); setDetalle(""); }}>Añadir</button>
+    <button class=${can?"btn-primary":"btn-disabled"} disabled=${!can} onClick=${()=>{ onAddFix(onAdd, {tipo,medida,detalle:detalle||undefined}); setMedida(""); setDetalle(""); }}>Añadir</button>
   </div>`;
 }
-
-// small helper to avoid accidental empty adds
-function on AddFix(cb, m){ if (!m.medida) return; cb(m); }
+function onAddFix(cb, m){ if (!m.medida) return; cb(m); }
