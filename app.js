@@ -57,16 +57,19 @@ function usePersist(){
   return [state,setState];
 }
 
-// Hash routing simple: "", "#/A", "#/A/2100"
+// Hash routing: "", "#/A", "#/A/2100", "#/parte"
 function parseHash(){
   const h = (location.hash||"").replace(/^#\/?/,"");
-  if (!h) return { block:null, room:null };
+  if (!h) return { page:"plan", block:null, room:null };
   const p = h.split("/");
+  if (p[0]==="parte") return { page:"parte", block:null, room:null };
   const block = p[0]||null;
   const room = p[1]? Number(p[1]) : null;
-  return { block, room };
+  return { page:"plan", block, room };
 }
-function setRoute(block, room){
+function setRouteTo(pageOrBlock, room){
+  if (pageOrBlock==="parte"){ location.hash = "#/parte"; return; }
+  const block = pageOrBlock;
   if (!block) location.hash = "";
   else if (!room) location.hash = `#/${block}`;
   else location.hash = `#/${block}/${room}`;
@@ -82,7 +85,14 @@ function pillStyle(type, selected){
   }
 }
 
+function nowISO(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export default function App(){
+  const [page,setPage]=useState("plan");
   const [selBlock,setSelBlockState]=useState(null);
   const [selRoom,setSelRoomState]=useState(null);
   const [filter,setFilter]=useState("");
@@ -91,21 +101,28 @@ export default function App(){
   // Init from hash + listen back button
   useEffect(()=>{
     const apply = ()=>{
-      const { block, room } = parseHash();
-      if (!block){ setSelBlockState(null); setSelRoomState(null); return; }
-      const b = BLOQUES.find(x=>x.id===block);
-      setSelBlockState(b||null);
-      setSelRoomState(room||null);
+      const { page, block, room } = parseHash();
+      setPage(page);
+      if (page==="plan"){
+        if (!block){ setSelBlockState(null); setSelRoomState(null); return; }
+        const b = BLOQUES.find(x=>x.id===block);
+        setSelBlockState(b||null);
+        setSelRoomState(room||null);
+      } else {
+        setSelBlockState(null);
+        setSelRoomState(null);
+      }
     };
     window.addEventListener("hashchange", apply);
     apply();
     return ()=>window.removeEventListener("hashchange", apply);
   },[]);
 
-  // Navigation helpers that also set hash
-  function goPlan(){ setRoute(null,null); }
-  function goBlock(b){ setRoute(b.id,null); }
-  function goRoom(n){ setRoute(selBlock.id,n); }
+  // Navigation
+  function goPlan(){ setRouteTo(null,null); }
+  function goBlock(b){ setRouteTo(b.id,null); }
+  function goRoom(n){ setRouteTo(selBlock.id,n); }
+  function goParte(){ setRouteTo("parte"); }
 
   const blockRooms = useMemo(()=>{
     if(!selBlock) return [];
@@ -144,16 +161,87 @@ export default function App(){
     setState(prev=>({ ...prev, [room]:{ items:{}, notes:"", measures:[], overall:"auto" } }));
   }
 
-  const filteredRooms = blockRooms.filter(n=>n.toString().includes(filter.trim()));
+  // PARTES: construir resumen por bloque con fallos y pendientes
+  const parte = useMemo(()=>{
+    const byBlock = {};
+    for (const b of BLOQUES){
+      const rooms = Array.from({length: b.to-b.from+1},(_,i)=>b.from+i);
+      const entries = [];
+      for (const n of rooms){
+        const r = state[n] || {};
+        const items = r.items || {};
+        const fails = Object.entries(items).filter(([,v]) => v==="fail");
+        const pends = Object.entries(items).filter(([,v]) => v==="pending");
+        if (fails.length || pends.length){
+          const detalle = [];
+          for (const [k] of fails){
+            const lab = (CHECKS.find(c=>c.id===k)||{}).label || k;
+            detalle.push({ tipo:"Fallo", item:k, label:lab });
+          }
+          for (const [k] of pends){
+            const lab = (CHECKS.find(c=>c.id===k)||{}).label || k;
+            detalle.push({ tipo:"Pendiente", item:k, label:lab });
+          }
+          const measures = (r.measures||[]);
+          const notes = r.notes||"";
+          entries.push({ room:n, detalle, measures, notes });
+        }
+      }
+      byBlock[b.id] = entries;
+    }
+    return byBlock;
+  },[state]);
+
+  function exportCSV(){
+    const rows = [["Bloque","Residencia","Tipo","Elemento","Detalle","Medidas","Notas"]];
+    for (const b of BLOQUES){
+      for (const e of (parte[b.id]||[])){
+        const medidas = (e.measures||[]).map(m=>`[${m.tipo}] ${m.medida}${m.detalle?` — ${m.detalle}`:""}`).join(" | ");
+        if (e.detalle.length===0){
+          rows.push([b.id, String(e.room), "", "", "", medidas, e.notes||""]);
+        } else {
+          for (const d of e.detalle){
+            rows.push([b.id, String(e.room), d.tipo, d.label, "", medidas, e.notes||""]);
+          }
+        }
+      }
+    }
+    const csv = rows.map(r=>r.map(x=>{
+      const s = (x??"").toString();
+      return /[",\n;]/.test(s) ? `"${s.replace(/"/g,'""')}"` : s;
+    }).join("," )).join("\n");
+    const blob = new Blob([csv], { type:"text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `parte_mantenimiento_${nowISO().replace(/[: ]/g,'-')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
 
   return html`
     <div>
       <header class="container">
         <h1>Mantenimiento Hotel · Residences</h1>
-        <div class="kv">v1.0-rc3a · Plano con iconos · Barra de estado por bloque</div>
+        <div class="actions">
+          ${page==="parte"
+            ? html`<button class="btn-light" onClick=${goPlan}>← Plano</button>`
+            : selRoom!=null
+              ? html`<button class="btn-light" onClick=${()=>goBlock(selBlock)}>← Residencias</button>`
+              : selBlock
+                ? html`<button class="btn-light" onClick=${goPlan}>← Plano</button>`
+                : null}
+          <button class="btn" onClick=${goParte}>Parte</button>
+          ${page==="parte" && html`
+            <button class="btn" onClick=${()=>window.print()}>Imprimir</button>
+            <button class="btn-primary" onClick=${exportCSV}>Exportar CSV</button>
+          `}
+        </div>
       </header>
 
-      ${!selBlock && html`
+      ${page==="parte" && html`<${ParteView} parte=${parte} />`}
+
+      ${page!=="parte" && !selBlock && html`
         <main class="container">
           <div class="plan">
             ${BLOQUES.map(b=>html`<${BlockTile} key=${b.id} b=${b} state=${state} onClick=${()=>goBlock(b)} />`)}
@@ -162,23 +250,26 @@ export default function App(){
         </main>
       `}
 
-      ${selBlock && selRoom==null && html`
+      ${page!=="parte" && selBlock && selRoom==null && html`
         <main class="container">
-          <button class="btn-light" onClick=${goPlan}>← Plano</button>
           <h2 style="margin-top:8px;font-size:18px;font-weight:600">Bloque ${selBlock.label}</h2>
           <div style="margin-top:8px">
             <input placeholder="Filtrar número…" value=${filter} onInput=${e=>setFilter(e.target.value)} />
           </div>
           <div class="rooms">
-            ${filteredRooms.map(n=>html`<${RoomChip} key=${n} n=${n} overall=${(state[n]?.overall && state[n]?.overall!=="auto" ? state[n]?.overall : autoOverallFromItems(state[n]?.items))} onClick=${()=>goRoom(n)} />`)}
+            ${blockRooms.filter(n=>n.toString().includes(filter.trim())).map(n=>html`<${RoomChip}
+              key=${n}
+              n=${n}
+              overall=${(state[n]?.overall && state[n]?.overall!=="auto" ? state[n]?.overall : autoOverallFromItems(state[n]?.items))}
+              onClick=${()=>goRoom(n)}
+            />`)}
           </div>
         </main>
       `}
 
-      ${selRoom!=null && html`
+      ${page!=="parte" && selRoom!=null && html`
         <main class="container">
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-            <button class="btn-light" onClick=${()=>goBlock(selBlock)}>← Residencias</button>
             <h2 style="font-size:18px;font-weight:600">Residencia ${selRoom}</h2>
             <span class="pill" style=${`margin-left:auto;background:${overall==="auto"?"#334155":(COLORS[overall]||COLORS.none)};color:${COLORS.white}`}>${labelState(overall)}</span>
             <button class="btn-danger" onClick=${()=>resetRoom(selRoom)}>Reiniciar habitación</button>
@@ -200,7 +291,7 @@ export default function App(){
           </section>
 
           <section class="card">
-            <h3 style="font-size:16px;font-weight:600">Medidas para sustituciones</h3>
+            <h3 class="section-title" style="font-size:16px;font-weight:600">Medidas para sustituciones</h3>
             <${MeasureForm} onAdd=${m=>addMeasure(selRoom,m)} />
             <ul style="margin-top:8px;padding-left:18px">
               ${(roomState.measures||[]).map((m,idx)=>html`<li style="margin-bottom:4px">
@@ -224,9 +315,36 @@ export default function App(){
         </main>
       `}
 
-      <footer class="container">v1.0-rc3a — Contraste, reinicio y barra por bloque</footer>
+      <footer class="container">v1.0-rc4 — Parte de trabajo, imprimir y CSV</footer>
     </div>
   `;
+}
+
+function ParteView({ parte }){
+  const byId = id => ({ A:"A",B:"B",C:"C",D:"D",V:"VILLAS" }[id] || id);
+  return html`<main class="container">
+    <h2 style="font-size:18px;font-weight:600">Parte de trabajo</h2>
+    ${Object.entries(parte).map(([bid, entries])=>html`
+      <section class="card">
+        <h3 style="font-size:16px;font-weight:600">Bloque ${byId(bid)}</h3>
+        ${entries.length===0 ? html`<div class="kv">Sin fallos ni pendientes.</div>` : html`
+          <div>
+            ${entries.sort((a,b)=>a.room-b.room).map(e=>html`
+              <div style="margin:8px 0;padding:8px;border:1px solid var(--b2);border-radius:10px">
+                <div style="font-weight:700">Residencia ${e.room}</div>
+                <ul style="margin:6px 0 0 18px">
+                  ${e.detalle.map(d=>html`<li>${d.tipo}: ${d.label}</li>`)}
+                </ul>
+                ${(e.measures && e.measures.length) ? html`
+                  <div class="kv" style="margin-top:6px">Medidas: ${e.measures.map(m=>`[${m.tipo}] ${m.medida}${m.detalle?` — ${m.detalle}`:""}`).join(" | ")}</div>` : null}
+                ${e.notes ? html`<div class="kv" style="margin-top:6px">Notas: ${e.notes}</div>` : null}
+              </div>
+            `)}
+          </div>
+        `}
+      </section>
+    `)}
+  </main>`;
 }
 
 function BlockTile({ b, state, onClick }){
@@ -278,7 +396,6 @@ function MeasureForm({ onAdd }){
     </select>
     <input placeholder="Medida (ej. 60x90 cm)" value=${medida} onInput=${e=>setMedida(e.target.value)} />
     <input placeholder="Detalle opcional" value=${detalle} onInput=${e=>setDetalle(e.target.value)} />
-    <button class=${can?"btn-primary":"btn-disabled"} disabled=${!can} onClick=${()=>{ onAddFix(onAdd, {tipo,medida,detalle:detalle||undefined}); setMedida(""); setDetalle(""); }}>Añadir</button>
+    <button class=${can?"btn-primary":"btn-disabled"} disabled=${!can} onClick=${()=>{ onAdd({tipo,medida,detalle:detalle||undefined}); setMedida(""); setDetalle(""); }}>Añadir</button>
   </div>`;
 }
-function onAddFix(cb, m){ if (!m.medida) return; cb(m); }
