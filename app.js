@@ -40,19 +40,13 @@ const CHECKS = [
 ];
 
 function labelState(s){ return s==="ok"?"OK":s==="fail"?"Fallo":s==="pending"?"Pendiente":s==="auto"?"Auto":"—"; }
-function autoOverallRoom(room){
-  if (!room || !room.items) return "none";
-  const vals = Object.values(room.items);
+
+function autoOverallFromItems(items){
+  const vals = Object.values(items||{}).filter(v => v !== "none"); // ignorar 'none'
+  if (vals.length===0) return "none";
   if (vals.includes("fail")) return "fail";
   if (vals.includes("pending")) return "pending";
-  if (vals.length===0) return "none";
-  return "ok";
-}
-function summarizeColor(list){
-  if (list.some(s=>"fail"===s)) return COLORS.fail;
-  if (list.some(s=>"pending"===s)) return COLORS.pending;
-  if (list.every(s=>"none"===s)) return COLORS.none;
-  return COLORS.ok;
+  return "ok"; // solo ok si todo lo marcado es OK
 }
 
 function usePersist(){
@@ -120,7 +114,7 @@ export default function App(){
   },[selBlock]);
 
   const roomState = state[selRoom] || { items:{}, notes:"", measures:[], overall:"none" };
-  const autoOverall = useMemo(()=>autoOverallRoom(roomState),[selRoom,state]);
+  const autoOverall = useMemo(()=>autoOverallFromItems(roomState.items),[selRoom,state]);
   const overall = roomState.overall && roomState.overall!=="auto" ? roomState.overall : autoOverall;
 
   function setItem(room, itemId, value){
@@ -146,6 +140,9 @@ export default function App(){
   function delMeasure(room,idx){
     setState(prev=>({ ...prev, [room]:{ ...(prev[room]||{items:{},notes:""}), measures:(prev[room]?.measures||[]).filter((_,i)=>i!==idx) } }));
   }
+  function resetRoom(room){
+    setState(prev=>({ ...prev, [room]:{ items:{}, notes:\"\", measures:[], overall:\"auto\" } }));
+  }
 
   const filteredRooms = blockRooms.filter(n=>n.toString().includes(filter.trim()));
 
@@ -153,7 +150,7 @@ export default function App(){
     <div>
       <header class="container">
         <h1>Mantenimiento Hotel · Residences</h1>
-        <div class="kv">v1.0-rc2 · Plano con iconos · Navegación con botón Atrás</div>
+        <div class="kv">v1.0-rc3 · Plano con iconos · Barra de estado por bloque</div>
       </header>
 
       ${!selBlock && html`
@@ -173,17 +170,18 @@ export default function App(){
             <input placeholder="Filtrar número…" value=${filter} onInput=${e=>setFilter(e.target.value)} />
           </div>
           <div class="rooms">
-            ${filteredRooms.map(n=>html`<${RoomChip} key=${n} n=${n} overall=${(state[n]?.overall||autoOverallRoom(state[n]))} onClick=${()=>goRoom(n)} />`)}
+            ${filteredRooms.map(n=>html`<${RoomChip} key=${n} n=${n} overall=${(state[n]?.overall && state[n]?.overall!=="auto" ? state[n]?.overall : autoOverallFromItems(state[n]?.items))} onClick=${()=>goRoom(n)} />`)}
           </div>
         </main>
       `}
 
       ${selRoom!=null && html`
         <main class="container">
-          <div style="display:flex;gap:8px;align-items:center">
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <button class="btn-light" onClick=${()=>goBlock(selBlock)}>← Residencias</button>
             <h2 style="font-size:18px;font-weight:600">Residencia ${selRoom}</h2>
             <span class="pill" style=${`margin-left:auto;background:${overall==="auto"?"#334155":(COLORS[overall]||COLORS.none)};color:${COLORS.white}`}>${labelState(overall)}</span>
+            <button class="btn-danger" onClick=${()=>resetRoom(selRoom)}>Reiniciar habitación</button>
           </div>
 
           <section class="card">
@@ -226,22 +224,32 @@ export default function App(){
         </main>
       `}
 
-      <footer class="container">v1.0-rc2 — Contraste mejorado + botón Atrás</footer>
+      <footer class="container">v1.0-rc3 — Contraste, reinicio de habitación y barra de estado por bloque</footer>
     </div>
   `;
 }
 
 function BlockTile({ b, state, onClick }){
   const rooms = Array.from({length: b.to-b.from+1},(_,i)=>b.from+i);
-  const overalls = rooms.map(n=>(state[n]?.overall || autoOverallRoom(state[n])));
-  const bg = summarizeColor(overalls);
-  const useDark = bg===COLORS.none;
-  const icon = b.id==="V" ? "🏡" : "🏢";
-  return html`<button class="tile" onClick=${onClick} style=${`background:${bg};border-color:${COLORS.border};color:${useDark?COLORS.dark:COLORS.white}`}>
-    <div>
-      <div style="font-size:24px">${icon}</div>
-      <div>${b.label}</div>
-      <div class="kv" style=${`color:${useDark?COLORS.dark:"#f1f5f9"}`}>${rooms[0]}–${rooms[rooms.length-1]}</div>
+  const overalls = rooms.map(n=>{
+    const r = state[n];
+    return (r && r.overall && r.overall!=="auto") ? r.overall : autoOverallFromItems(r?.items);
+  });
+  const total = rooms.length;
+  const fail = overalls.filter(x=>x==="fail").length;
+  const pend = overalls.filter(x=>x==="pending").length;
+  const ok = overalls.filter(x=>x==="ok").length;
+  const none = overalls.filter(x=>x==="none").length;
+  return html`<button class="tile" onClick=${onClick}>
+    <div style="width:100%">
+      <div style="font-size:24px">${b.id==="V"?"🏡":"🏢"}</div>
+      <div>${b.label} · ${rooms[0]}–${rooms[rooms.length-1]}</div>
+      <div class="kv" style="margin-top:4px">Fallo: ${fail} · Pend: ${pend} · OK: ${ok} · Sin marcar: ${none}</div>
+      <div class="progress" style="margin-top:8px">
+        <div style=${`height:100%;width:${(fail/total)*100}%;background:${COLORS.fail};float:left`}></div>
+        <div style=${`height:100%;width:${(pend/total)*100}%;background:${COLORS.pending};float:left`}></div>
+        <div style=${`height:100%;width:${(ok/total)*100}%;background:${COLORS.ok};float:left`}></div>
+      </div>
     </div>
   </button>`;
 }
@@ -270,6 +278,9 @@ function MeasureForm({ onAdd }){
     </select>
     <input placeholder="Medida (ej. 60x90 cm)" value=${medida} onInput=${e=>setMedida(e.target.value)} />
     <input placeholder="Detalle opcional" value=${detalle} onInput=${e=>setDetalle(e.target.value)} />
-    <button class=${can?"btn-primary":"btn-disabled"} disabled=${!can} onClick=${()=>{ onAdd({tipo,medida,detalle:detalle||undefined}); setMedida(""); setDetalle(""); }}>Añadir</button>
+    <button class=${can?"btn-primary":"btn-disabled"} disabled=${!can} onClick=${()=>{ on AddFix(onAdd, {tipo,medida,detalle:detalle||undefined}); setMedida(""); setDetalle(""); }}>Añadir</button>
   </div>`;
 }
+
+// small helper to avoid accidental empty adds
+function on AddFix(cb, m){ if (!m.medida) return; cb(m); }
