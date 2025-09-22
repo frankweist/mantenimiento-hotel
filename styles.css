@@ -1,26 +1,12 @@
 
 :root{
-  --bg:#f8fafc; --text:#0f172a; --muted:#64748b;
+  --bg:#f8fafc; --text:#0f172a; --muted:#475569;
   --b:#e2e8f0; --b2:#cbd5e1; --ok:#10b981; --fail:#ef4444; --pend:#f59e0b; --none:#e5e7eb;
 }
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 .container{max-width:1100px;margin:0 auto;padding:12px}
 header{display:flex;align-items:center;justify-content:space-between}
 h1{font-size:22px;font-weight:600;margin:0}
-select,input,textarea,button{font:inherit}
-select,input,textarea{padding:8px 10px;border:1px solid var(--b2);border-radius:10px;background:#fff}
-button{border-radius:10px;border:1px solid transparent;padding:8px 12px}
-.btn{background:#e2e8f0}
-.btn-light{background:#fff;border:1px solid var(--b2)}
-.btn-primary{background:#0ea5e9;border:1px solid #0ea5e9;color:#fff;font-weight:600}
-.btn-disabled{background:#e2e8f0;border:1px solid var(--b2);color:var(--muted)}
-.grid{display:grid;gap:12px}
-.plan{display:grid;grid-template-areas:"A B" "C D" "V V";grid-template-columns:1fr 1fr;gap:12px}
-.tile{min-height:120px;border:1px solid var(--b2);border-radius:16px;padding:16px;display:flex;align-items:center;justify-content:center;text-align:center;color:#fff;font-weight:700}
-.rooms{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:12px}
-.room{border:1px solid var(--b);border-radius:10px;padding:10px 12px;color:#fff;font-weight:700}
-.card{background:#fff;border:1px solid var(--b);border-radius:12px;padding:12px;margin-top:12px}
-.pill{padding:6px 10px;border-radius:999px;border:1px solid rgba(0,0,0,.05);font-size:12px}
-.kv{font-size:12px;color:#475569}
-footer{color:#64748b;font-size:12px}
+button{cursor:pointer}
+.tile{min-height:120px;border:1px solid var(--b2);border-radius:16px;padding:16px;text-align:center;font-weight:700}
+.room{border:1px solid var(--b);border-radius:10px;padding:10px 12px;font-weight:700}

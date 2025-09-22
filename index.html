@@ -9,15 +9,6 @@
 </head>
 <body>
   <div id="app"></div>
-
-  <!-- Preact + HTM from CDN -->
-  <script type="module">
-    import { h, render } from "https://esm.sh/preact@10.22.0";
-    import { useState, useEffect, useMemo } from "https://esm.sh/preact@10.22.0/hooks";
-    import htm from "https://esm.sh/htm@3.1.1";
-    import App from "./app.js";
-    const html = htm.bind(h);
-    render(html`<${App} />`, document.getElementById("app"));
-  </script>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>
