@@ -1,7 +1,7 @@
 
 :root{
   --bg:#f8fafc; --text:#0f172a; --muted:#475569;
-  --b:#e2e8f0; --b2:#cbd5e1; --ok:#10b981; --fail:#ef4444; --pend:#f59e0b; --none:#e5e7eb; --white:#ffffff;
+  --b:#e2e8f0; --b2:#cbd5e1; --ok:#10b981; --fail:#ef4444; --rev:#f59e0b; --none:#e5e7eb; --white:#ffffff;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
@@ -10,6 +10,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 h1{font-size:22px;font-weight:600;margin:0}
 select,input,textarea,button{font:inherit}
 select,input,textarea{padding:8px 10px;border:1px solid var(--b2);border-radius:10px;background:#fff}
+input.small{padding:6px 8px;font-size:13px}
 button{border-radius:10px;border:1px solid transparent;padding:8px 12px;cursor:pointer}
 .actions{display:flex;gap:8px;align-items:center}
 .btn{background:#e2e8f0}
@@ -28,3 +29,5 @@ button{border-radius:10px;border:1px solid transparent;padding:8px 12px;cursor:p
 footer{color:#64748b;font-size:12px}
 .progress{height:8px;border-radius:6px;background:#e5e7eb;overflow:hidden;border:1px solid #cbd5e1}
 .section-title{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.item-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.item-row .note{flex:1 1 200px}

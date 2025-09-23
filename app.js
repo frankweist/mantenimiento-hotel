@@ -16,7 +16,7 @@ const BLOQUES = [
 
 const COLORS = {
   none: "#e5e7eb",
-  pending: "#f59e0b",
+  review: "#f59e0b", // Por revisar
   ok: "#10b981",
   fail: "#ef4444",
   dark: "#0f172a",
@@ -39,14 +39,20 @@ const CHECKS = [
   { id: "desperfectos", label: "Desperfectos" },
 ];
 
-function labelState(s){ return s==="ok"?"OK":s==="fail"?"Fallo":s==="pending"?"Pendiente":s==="auto"?"Auto":"—"; }
+function labelState(s){ return s==="ok"?"OK":s==="fail"?"Fallo":s==="pending"?"Por revisar":s==="auto"?"Auto":"—"; }
 
-function autoOverallFromItems(items){
-  const vals = Object.values(items||{}).filter(v => v !== "none"); // ignorar 'none'
+function autoOverallFromRoom(room){
+  const items = room?.items || {};
+  const vals = Object.values(items).filter(v => v !== "none");
+  const hasFail = vals.includes("fail");
+  const hasPend = vals.includes("pending");
+  const anyItemNote = !!room?.itemNotes && Object.values(room.itemNotes).some(t => (t||"").trim().length>0);
+  const anyRoomNote = !!(room?.notes||"").trim().length;
+  if (hasFail) return "fail";
+  if (hasPend) return "pending";
+  if (!hasFail && !hasPend && (anyItemNote || anyRoomNote)) return "fail";
   if (vals.length===0) return "none";
-  if (vals.includes("fail")) return "fail";
-  if (vals.includes("pending")) return "pending";
-  return "ok"; // solo ok si todo lo marcado es OK
+  return "ok";
 }
 
 function usePersist(){
@@ -76,11 +82,12 @@ function setRouteTo(pageOrBlock, room){
 }
 
 function pillStyle(type, selected){
+  const t = (type==="review"?"pending":type);
   if (selected){
-    const bg = type==="ok"?COLORS.ok : type==="fail"?COLORS.fail : type==="pending"?COLORS.pending : "#334155";
+    const bg = t==="ok"?COLORS.ok : t==="fail"?COLORS.fail : t==="pending"?COLORS.review : "#334155";
     return `background:${bg};color:${COLORS.white};border-color:${bg};`;
   } else {
-    const tc = type==="ok"?COLORS.ok : type==="fail"?COLORS.fail : type==="pending"?COLORS.pending : "#334155";
+    const tc = t==="ok"?COLORS.ok : t==="fail"?COLORS.fail : t==="pending"?COLORS.review : "#334155";
     return `background:${COLORS.white};color:${tc};border:1px solid ${tc};`;
   }
 }
@@ -98,7 +105,6 @@ export default function App(){
   const [filter,setFilter]=useState("");
   const [state,setState]=usePersist();
 
-  // Init from hash + listen back button
   useEffect(()=>{
     const apply = ()=>{
       const { page, block, room } = parseHash();
@@ -118,7 +124,6 @@ export default function App(){
     return ()=>window.removeEventListener("hashchange", apply);
   },[]);
 
-  // Navigation
   function goPlan(){ setRouteTo(null,null); }
   function goBlock(b){ setRouteTo(b.id,null); }
   function goRoom(n){ setRouteTo(selBlock.id,n); }
@@ -130,8 +135,8 @@ export default function App(){
     return Array.from({length:b.to-b.from+1},(_,i)=>b.from+i);
   },[selBlock]);
 
-  const roomState = state[selRoom] || { items:{}, notes:"", measures:[], overall:"none" };
-  const autoOverall = useMemo(()=>autoOverallFromItems(roomState.items),[selRoom,state]);
+  const roomState = state[selRoom] || { items:{}, itemNotes:{}, notes:"", measures:[], overall:"none" };
+  const autoOverall = useMemo(()=>autoOverallFromRoom(roomState),[selRoom,state]);
   const overall = roomState.overall && roomState.overall!=="auto" ? roomState.overall : autoOverall;
 
   function setItem(room, itemId, value){
@@ -139,6 +144,19 @@ export default function App(){
       ...prev,
       [room]:{
         items:{ ...(prev[room]?.items||{}), [itemId]: value },
+        itemNotes: prev[room]?.itemNotes || {},
+        notes: prev[room]?.notes || "",
+        measures: prev[room]?.measures || [],
+        overall: prev[room]?.overall || "auto",
+      }
+    }));
+  }
+  function setItemNote(room, itemId, text){
+    setState(prev => ({
+      ...prev,
+      [room]:{
+        items:{ ...(prev[room]?.items||{}) },
+        itemNotes:{ ...(prev[room]?.itemNotes||{}), [itemId]: text },
         notes: prev[room]?.notes || "",
         measures: prev[room]?.measures || [],
         overall: prev[room]?.overall || "auto",
@@ -146,22 +164,21 @@ export default function App(){
     }));
   }
   function setOverall(room,value){
-    setState(prev=>({ ...prev, [room]:{ ...(prev[room]||{items:{},notes:"",measures:[]}), overall:value } }));
+    setState(prev=>({ ...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",measures:[]}), overall:value } }));
   }
   function setNotes(room,value){
-    setState(prev=>({ ...prev, [room]:{ ...(prev[room]||{items:{},measures:[]}), notes:value, overall: prev[room]?.overall || "auto" } }));
+    setState(prev=>({ ...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},measures:[]}), notes:value, overall: prev[room]?.overall || "auto" } }));
   }
   function addMeasure(room,m){
-    setState(prev=>({ ...prev, [room]:{ ...(prev[room]||{items:{},notes:""}), measures:[ ...(prev[room]?.measures||[]), m ], overall: prev[room]?.overall || "auto" } }));
+    setState(prev=>({ ...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:""}), measures:[ ...(prev[room]?.measures||[]), m ], overall: prev[room]?.overall || "auto" } }));
   }
   function delMeasure(room,idx){
-    setState(prev=>({ ...prev, [room]:{ ...(prev[room]||{items:{},notes:""}), measures:(prev[room]?.measures||[]).filter((_,i)=>i!==idx) } }));
+    setState(prev=>({ ...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:""}), measures:(prev[room]?.measures||[]).filter((_,i)=>i!==idx) } }));
   }
   function resetRoom(room){
-    setState(prev=>({ ...prev, [room]:{ items:{}, notes:"", measures:[], overall:"auto" } }));
+    setState(prev=>({ ...prev, [room]:{ items:{}, itemNotes:{}, notes:"", measures:[], overall:"auto" } }));
   }
 
-  // PARTES: construir resumen por bloque con fallos y pendientes
   const parte = useMemo(()=>{
     const byBlock = {};
     for (const b of BLOQUES){
@@ -170,21 +187,43 @@ export default function App(){
       for (const n of rooms){
         const r = state[n] || {};
         const items = r.items || {};
+        const itemNotes = r.itemNotes || {};
         const fails = Object.entries(items).filter(([,v]) => v==="fail");
-        const pends = Object.entries(items).filter(([,v]) => v==="pending");
-        if (fails.length || pends.length){
-          const detalle = [];
-          for (const [k] of fails){
-            const lab = (CHECKS.find(c=>c.id===k)||{}).label || k;
-            detalle.push({ tipo:"Fallo", item:k, label:lab });
+        const revs  = Object.entries(items).filter(([,v]) => v==="pending");
+        const detalle = [];
+
+        for (const [k] of fails){
+          const lab = (CHECKS.find(c=>c.id===k)||{}).label || k;
+          const note = (itemNotes[k]||"").trim();
+          detalle.push({ tipo:"Fallo", item:k, label: lab + (note?` — obs: ${note}`:"") });
+        }
+        for (const [k] of revs){
+          const lab = (CHECKS.find(c=>c.id===k)||{}).label || k;
+          const note = (itemNotes[k]||"").trim();
+          detalle.push({ tipo:"Por revisar", item:k, label: lab + (note?` — obs: ${note}`:"") });
+        }
+
+        const roomNote = (r.notes||"").trim();
+        const anyItemNoteOnly = Object.entries(itemNotes).some(([k,v]) => (v||"").trim().length>0 && (!items[k] || items[k]==="none" || items[k]==="ok"));
+        if (detalle.length===0 && (roomNote || anyItemNoteOnly)){
+          if (anyItemNoteOnly){
+            for (const [k,v] of Object.entries(itemNotes)){
+              const note = (v||"").trim();
+              if (!note) continue;
+              const status = items[k];
+              if (!status || status==="none" || status==="ok"){
+                const lab = (CHECKS.find(c=>c.id===k)||{}).label || k;
+                detalle.push({ tipo:"Fallo", item:k, label: `${lab} — obs: ${note}` });
+              }
+            }
           }
-          for (const [k] of pends){
-            const lab = (CHECKS.find(c=>c.id===k)||{}).label || k;
-            detalle.push({ tipo:"Pendiente", item:k, label:lab });
+          if (roomNote){
+            detalle.push({ tipo:"Fallo", item:"observacion_general", label:`Observación general — ${roomNote}` });
           }
-          const measures = (r.measures||[]);
-          const notes = r.notes||"";
-          entries.push({ room:n, detalle, measures, notes });
+        }
+
+        if (detalle.length){
+          entries.push({ room:n, detalle, measures:(r.measures||[]), notes: roomNote });
         }
       }
       byBlock[b.id] = entries;
@@ -201,7 +240,8 @@ export default function App(){
           rows.push([b.id, String(e.room), "", "", "", medidas, e.notes||""]);
         } else {
           for (const d of e.detalle){
-            rows.push([b.id, String(e.room), d.tipo, d.label, "", medidas, e.notes||""]);
+            const parts = d.label.split(" — obs: ");
+            rows.push([b.id, String(e.room), d.tipo, parts[0], parts[1]||"", medidas, e.notes||""]);
           }
         }
       }
@@ -257,12 +297,11 @@ export default function App(){
             <input placeholder="Filtrar número…" value=${filter} onInput=${e=>setFilter(e.target.value)} />
           </div>
           <div class="rooms">
-            ${blockRooms.filter(n=>n.toString().includes(filter.trim())).map(n=>html`<${RoomChip}
-              key=${n}
-              n=${n}
-              overall=${(state[n]?.overall && state[n]?.overall!=="auto" ? state[n]?.overall : autoOverallFromItems(state[n]?.items))}
-              onClick=${()=>goRoom(n)}
-            />`)}
+            ${blockRooms.filter(n=>n.toString().includes(filter.trim())).map(n=>{
+              const r = state[n] || {};
+              const overall = (r.overall && r.overall!=="auto") ? r.overall : autoOverallFromRoom(r);
+              return html`<${RoomChip} key=${n} n=${n} overall=${overall} onClick=${()=>goRoom(n)} />`;
+            })}
           </div>
         </main>
       `}
@@ -277,13 +316,18 @@ export default function App(){
 
           <section class="card">
             <h3 style="font-size:16px;font-weight:600">Checklist</h3>
-            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-top:8px">
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-top:8px">
               ${CHECKS.map(c=>{
-                const cur = roomState.items[c.id] || "none";
+                const r = state[selRoom] || {};
+                const cur = (r.items||{})[c.id] || "none";
+                const note = (r.itemNotes||{})[c.id] || "";
                 return html`<div class="card" style="margin-top:0;padding:10px">
                   <div style="font-size:14px;margin-bottom:8px">${c.label}</div>
-                  <div style="display:flex;gap:6;flex-wrap:wrap">
-                    ${["ok","fail","pending","none"].map(s=>html`<button class="pill" onClick=${()=>setItem(selRoom,c.id,s)} style=${pillStyle(s, s===cur)}>${s==="none"?"Borrar":labelState(s)}</button>`)}
+                  <div class="item-row">
+                    <div>
+                      ${["ok","fail","pending","none"].map(s=>html`<button class="pill" onClick=${()=>setItem(selRoom,c.id,s)} style=${pillStyle(s, s===cur)}>${s==="none"?"Borrar":labelState(s)}</button>`)}
+                    </div>
+                    <input class="note small" placeholder="Observación del elemento" value=${note} onInput=${e=>setItemNote(selRoom,c.id,e.target.value)} />
                   </div>
                 </div>`;
               })}
@@ -294,18 +338,18 @@ export default function App(){
             <h3 class="section-title" style="font-size:16px;font-weight:600">Medidas para sustituciones</h3>
             <${MeasureForm} onAdd=${m=>addMeasure(selRoom,m)} />
             <ul style="margin-top:8px;padding-left:18px">
-              ${(roomState.measures||[]).map((m,idx)=>html`<li style="margin-bottom:4px">
+              ${(state[selRoom]?.measures||[]).map((m,idx)=>html`<li style="margin-bottom:4px">
                 <span style="font-family:monospace">[${m.tipo}] ${m.medida}</span>
                 ${m.detalle?html`<span> — ${m.detalle}</span>`:null}
                 <button class="btn" style="margin-left:8px" onClick=${()=>delMeasure(selRoom,idx)}>Eliminar</button>
               </li>`)}
-              ${(!roomState.measures || roomState.measures.length===0) && html`<li style="color:#64748b">Sin medidas aún.</li>`}
+              ${(!(state[selRoom]?.measures)||state[selRoom].measures.length===0) && html`<li style="color:#64748b">Sin medidas aún.</li>`}
             </ul>
           </section>
 
           <section class="card">
             <h3 style="font-size:16px;font-weight:600">Observaciones</h3>
-            <textarea value=${roomState.notes||""} onInput=${e=>setNotes(selRoom,e.target.value)} placeholder="Detalles puntuales…" style="width:100%;min-height:90px"></textarea>
+            <textarea value=${(state[selRoom]?.notes)||""} onInput=${e=>setNotes(selRoom,e.target.value)} placeholder="Detalles puntuales…" style="width:100%;min-height:90px"></textarea>
           </section>
 
           <section class="container" style="padding-left:0">
@@ -315,7 +359,7 @@ export default function App(){
         </main>
       `}
 
-      <footer class="container">v1.0-rc4 — Parte de trabajo, imprimir y CSV</footer>
+      <footer class="container">v1.0-rc5 — Observaciones como fallo · Notas por ítem · “Por revisar”</footer>
     </div>
   `;
 }
@@ -327,7 +371,7 @@ function ParteView({ parte }){
     ${Object.entries(parte).map(([bid, entries])=>html`
       <section class="card">
         <h3 style="font-size:16px;font-weight:600">Bloque ${byId(bid)}</h3>
-        ${entries.length===0 ? html`<div class="kv">Sin fallos ni pendientes.</div>` : html`
+        ${entries.length===0 ? html`<div class="kv">Sin fallos ni por revisar.</div>` : html`
           <div>
             ${entries.sort((a,b)=>a.room-b.room).map(e=>html`
               <div style="margin:8px 0;padding:8px;border:1px solid var(--b2);border-radius:10px">
@@ -351,33 +395,36 @@ function BlockTile({ b, state, onClick }){
   const rooms = Array.from({length: b.to-b.from+1},(_,i)=>b.from+i);
   const overalls = rooms.map(n=>{
     const r = state[n];
-    return (r && r.overall && r.overall!=="auto") ? r.overall : autoOverallFromItems(r?.items);
+    return (r && r.overall && r.overall!=="auto") ? r.overall : (r ? autoOverallFromRoom(r) : "none");
   });
   const total = rooms.length;
   const fail = overalls.filter(x=>x==="fail").length;
-  const pend = overalls.filter(x=>x==="pending").length;
-  const ok = overalls.filter(x=>x==="ok").length;
+  const rev  = overalls.filter(x=>x==="pending").length;
+  const ok   = overalls.filter(x=>x==="ok").length;
   const none = overalls.filter(x=>x==="none").length;
   return html`<button class="tile" onClick=${onClick}>
     <div style="width:100%">
       <div style="font-size:24px">${b.id==="V"?"🏡":"🏢"}</div>
       <div>${b.label} · ${rooms[0]}–${rooms[rooms.length-1]}</div>
-      <div class="kv" style="margin-top:4px">Fallo: ${fail} · Pend: ${pend} · OK: ${ok} · Sin marcar: ${none}</div>
+      <div class="kv" style="margin-top:4px">Fallo: ${fail} · Rev: ${rev} · OK: ${ok} · Sin marcar: ${none}</div>
       <div class="progress" style="margin-top:8px">
-        <div style=${`height:100%;width:${(fail/total)*100}%;background:${COLORS.fail};float:left`}></div>
-        <div style=${`height:100%;width:${(pend/total)*100}%;background:${COLORS.pending};float:left`}></div>
-        <div style=${`height:100%;width:${(ok/total)*100}%;background:${COLORS.ok};float:left`}></div>
+        <div style=${`height:100%;width:${(fail/total)*100}%;background:#ef4444;float:left`}></div>
+        <div style=${`height:100%;width:${(rev/total)*100}%;background:#f59e0b;float:left`}></div>
+        <div style=${`height:100%;width:${(ok/total)*100}%;background:#10b981;float:left`}></div>
       </div>
     </div>
   </button>`;
 }
 
 function RoomChip({ n, overall, onClick }){
-  const bg = (overall && COLORS[overall]) || COLORS.none;
-  const isNone = overall==="none";
-  const color = isNone ? COLORS.dark : COLORS.white;
-  const border = isNone ? COLORS.border : "transparent";
-  const realBg = isNone ? COLORS.white : bg;
+  const map = { pending:"review" };
+  const key = map[overall] || overall;
+  const COLORS_MAP = { none:"#e5e7eb", review:"#f59e0b", ok:"#10b981", fail:"#ef4444" };
+  const bg = COLORS_MAP[key] || COLORS_MAP.none;
+  const isNone = key==="none";
+  const color = isNone ? "#0f172a" : "#ffffff";
+  const border = isNone ? "#cbd5e1" : "transparent";
+  const realBg = isNone ? "#ffffff" : bg;
   return html`<button class="room" onClick=${onClick} style=${`background:${realBg};color:${color};border-color:${border}`}>${n}</button>`;
 }
 
@@ -394,8 +441,8 @@ function MeasureForm({ onAdd }){
       <option value="enser">Enser</option>
       <option value="otro">Otro</option>
     </select>
-    <input placeholder="Medida (ej. 60x90 cm)" value=${medida} onInput=${e=>setMedida(e.target.value)} />
-    <input placeholder="Detalle opcional" value=${detalle} onInput=${e=>setDetalle(e.target.value)} />
+    <input class="small" placeholder="Medida (ej. 60x90 cm)" value=${medida} onInput=${e=>setMedida(e.target.value)} />
+    <input class="small" placeholder="Detalle opcional" value=${detalle} onInput=${e=>setDetalle(e.target.value)} />
     <button class=${can?"btn-primary":"btn-disabled"} disabled=${!can} onClick=${()=>{ onAdd({tipo,medida,detalle:detalle||undefined}); setMedida(""); setDetalle(""); }}>Añadir</button>
   </div>`;
 }
