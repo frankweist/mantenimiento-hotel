@@ -1,5 +1,5 @@
 
-import { h } from "https://esm.sh/preact@10.22.0";
+import { h, render } from "https://esm.sh/preact@10.22.0";
 import { useState, useEffect, useMemo } from "https://esm.sh/preact@10.22.0/hooks";
 import htm from "https://esm.sh/htm@3.1.1";
 const html = htm.bind(h);
@@ -448,10 +448,5 @@ function MeasureForm({ onAdd }){
 }
 
 
-/* Montaje de la app */
-import { render } from "https://esm.sh/preact@10.22.0";
-import htm from "https://esm.sh/htm@3.1.1";
-import { h } from "https://esm.sh/preact@10.22.0";
-const html = htm.bind(h);
-const mount = document.getElementById("app");
-render(html`<${App} />`, mount);
+/* Montaje */
+render(html`<${App} />`, document.getElementById("app"));
