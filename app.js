@@ -446,3 +446,12 @@ function MeasureForm({ onAdd }){
     <button class=${can?"btn-primary":"btn-disabled"} disabled=${!can} onClick=${()=>{ onAdd({tipo,medida,detalle:detalle||undefined}); setMedida(""); setDetalle(""); }}>Añadir</button>
   </div>`;
 }
+
+
+/* Montaje de la app */
+import { render } from "https://esm.sh/preact@10.22.0";
+import htm from "https://esm.sh/htm@3.1.1";
+import { h } from "https://esm.sh/preact@10.22.0";
+const html = htm.bind(h);
+const mount = document.getElementById("app");
+render(html`<${App} />`, mount);
