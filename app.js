@@ -7,7 +7,7 @@ const html = htm.bind(h);
 /*** Constantes ***/
 const GLOBAL_LS = { users:"mh_users_v1", current:"mh_user_current_v1" };
 const LEGACY = "mh_v1_state";
-const APP_VERSION = "v1.2-local";
+const APP_VERSION = "v1.3-local-incidencias";
 
 const BLOQUES = [
   { id: "A", label: "A", from: 2100, to: 2107 },
@@ -16,6 +16,7 @@ const BLOQUES = [
   { id: "D", label: "D", from: 2400, to: 2401 },
   { id: "V", label: "VILLAS", from: 3101, to: 3106 },
 ];
+
 const CHECKS = [
   { id: "luces", label: "Luces" },
   { id: "agua_caliente", label: "Agua caliente" },
@@ -38,6 +39,7 @@ const nsKey = a => `mh_v1_${a}_state`;
 const hashPIN = pin => { let h=5381; for (let i=0;i<pin.length;i++){ h=((h<<5)+h)+pin.charCodeAt(i); h|=0; } return "h"+(h>>>0).toString(16); };
 const nowISO = () => { const d=new Date(); const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
 
+/*** Lógica de estado global por habitación ***/
 function autoOverallFromRoom(room){
   const items = room?.items || {};
   const vals = Object.values(items).filter(v => v !== "none");
@@ -46,9 +48,11 @@ function autoOverallFromRoom(room){
   const anyItemNote = !!room?.itemNotes && Object.values(room.itemNotes).some(t => (t||"").trim().length>0);
   const anyRoomNote = !!(room?.notes||"").trim().length;
   if (hasFail) return "fail";
+  if (!hasFail && !hasPend && (anyItemNote || anyRoomNote)) return "fail"; // observaciones ⇒ fallo
   if (hasPend) return "pending";
-  if (!hasFail && !hasPend && (anyItemNote || anyRoomNote)) return "fail";
-  if (vals.length===0) return "none";
+  if (vals.length===0){
+    return room?.assumeOk ? "ok" : "none";
+  }
   return "ok";
 }
 
@@ -128,7 +132,7 @@ export default function App(){
   const [selBlock,setSelBlockState]=useState(null);
   const [selRoom,setSelRoomState]=useState(null);
   const [filter,setFilter]=useState("");
-  const [statusFilter,setStatusFilter]=useState("all");
+  const [statusFilter,setStatusFilter]=useState("all"); // all|fail|pending|ok|none
   const [state,setState]=usePersistByUser(user.aliasLower);
 
   useEffect(()=>{
@@ -151,29 +155,44 @@ export default function App(){
   const goParte=()=>setRouteTo("parte");
   const goCuenta=()=>setRouteTo("cuenta");
 
-  const roomState = state[selRoom] || { items:{}, itemNotes:{}, notes:"", measures:[], overall:"none" };
+  // Estado de habitación
+  const roomState = state[selRoom] || { items:{}, itemNotes:{}, notes:"", measures:[], overall:"none", assumeOk:false };
   const autoOverall = useMemo(()=>autoOverallFromRoom(roomState),[selRoom,state]);
   const overall = roomState.overall && roomState.overall!=="auto" ? roomState.overall : autoOverall;
 
   function setItem(room,itemId,value){
-    setState(prev=>({...prev,[room]:{items:{...(prev[room]?.items||{}),[itemId]:value},itemNotes:prev[room]?.itemNotes||{},notes:prev[room]?.notes||"",measures:prev[room]?.measures||[],overall:prev[room]?.overall||"auto"}}));
+    setState(prev=>({...prev,
+      [room]:{ ...((prev[room])||{items:{},itemNotes:{},notes:"",measures:[],assumeOk:false,overall:"auto"}),
+        items:{ ...(prev[room]?.items||{}), [itemId]: value }
+      }
+    }));
   }
   function setItemNote(room,itemId,text){
-    setState(prev=>({...prev,[room]:{items:{...(prev[room]?.items||{})},itemNotes:{...(prev[room]?.itemNotes||{}),[itemId]:text},notes:prev[room]?.notes||"",measures:prev[room]?.measures||[],overall:prev[room]?.overall||"auto"}}));
+    setState(prev=>({...prev,
+      [room]:{ ...((prev[room])||{items:{},itemNotes:{},notes:"",measures:[],assumeOk:false,overall:"auto"}),
+        itemNotes:{ ...(prev[room]?.itemNotes||{}), [itemId]: text }
+      }
+    }));
   }
-  const setOverallState=(room,value)=>setState(prev=>({...prev,[room]:{...(prev[room]||{items:{},itemNotes:{},notes:"",measures:[]}),overall:value}}));
-  const setNotes=(room,value)=>setState(prev=>({...prev,[room]:{...(prev[room]||{items:{},itemNotes:{},measures:[]}),notes:value,overall:prev[room]?.overall||"auto"}}));
-  const addMeasure=(room,m)=>setState(prev=>({...prev,[room]:{...(prev[room]||{items:{},itemNotes:{},notes:""}),measures:[...(prev[room]?.measures||[]),m],overall:prev[room]?.overall||"auto"}}));
-  const delMeasure=(room,idx)=>setState(prev=>({...prev,[room]:{...(prev[room]||{items:{},itemNotes:{},notes:""}),measures:(prev[room]?.measures||[]).filter((_,i)=>i!==idx)}}));
-  const resetRoom=(room)=>setState(prev=>({...prev,[room]:{items:{},itemNotes:{},notes:"",measures:[],overall:"auto"}}));
-  const markAllOk=(room)=>{
-    setState(prev=>{
-      const items={...(prev[room]?.items||{})};
-      for (const c of CHECKS){ items[c.id]="ok"; }
-      return {...prev, [room]:{ items, itemNotes:prev[room]?.itemNotes||{}, notes:prev[room]?.notes||"", measures:prev[room]?.measures||[], overall:"auto" }};
-    });
-  };
+  const setOverallState=(room,value)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",measures:[],assumeOk:false}), overall:value }}));
+  const setNotes=(room,value)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},measures:[],assumeOk:false}), notes:value, overall: prev[room]?.overall || "auto" }}));
+  const addMeasure=(room,m)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",assumeOk:false}), measures:[ ...(prev[room]?.measures||[]), m ], overall: prev[room]?.overall || "auto" }}));
+  const delMeasure=(room,idx)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",assumeOk:false}), measures:(prev[room]?.measures||[]).filter((_,i)=>i!==idx) }}));
+  const resetRoom=(room)=>setState(prev=>({...prev, [room]:{ items:{}, itemNotes:{}, notes:"", measures:[], overall:"auto", assumeOk:false } }));
+  const toggleAssumeOk=(room)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",measures:[]}), assumeOk: !(prev[room]?.assumeOk) }}));
 
+  // Añadir/Quitar incidencias
+  function addIncidencia(room, id){
+    if (!id) return;
+    setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",measures:[],assumeOk:false,overall:"auto"}),
+      items:{ ...(prev[room]?.items||{}), [id]:"pending" } }}));
+  }
+  function quitarIncidencia(room, id){
+    setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",measures:[],assumeOk:false,overall:"auto"}),
+      items:{ ...(prev[room]?.items||{}, [id]:"none") } }}));
+  }
+
+  // Parte
   const parte = useMemo(()=>{
     const byBlock={};
     for (const b of BLOQUES){
@@ -204,6 +223,7 @@ export default function App(){
     return byBlock;
   },[state]);
 
+  // Export CSV
   function exportCSV(){
     const rows=[["Usuario","Bloque","Residencia","Tipo","Elemento","Detalle","Medidas","Notas"]];
     const alias=user.profile?.alias||"anon";
@@ -264,6 +284,17 @@ export default function App(){
     });
   },[blockRooms, filter, statusFilter, state, selBlock]);
 
+  // Helpers para incidencias visibles
+  function visibleItemsFor(room){
+    const r = state[room] || {};
+    const items = r.items || {};
+    return Object.keys(items).filter(k => items[k]==="fail" || items[k]==="pending");
+  }
+  function remainingItemsFor(room){
+    const visible = new Set(visibleItemsFor(room));
+    return CHECKS.filter(c => !visible.has(c.id));
+  }
+
   return html`<div>
     <${Header} page=${page} selBlock=${selBlock} selRoom=${selRoom} goPlan=${goPlan} goBlock=${goBlock} goParte=${goParte} goCuenta=${goCuenta} user=${user} />
 
@@ -302,26 +333,38 @@ export default function App(){
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <h2 style="font-size:18px;font-weight:600">Residencia ${selRoom}</h2>
           <span class="pill" style=${`margin-left:auto;background:${overall==="auto"?"#334155":(COLORS[overall]||COLORS.none)};color:${COLORS.white}`}>${labelState(overall)}</span>
-          <button class="btn" onClick=${()=>markAllOk(selRoom)}>Marcar todo OK</button>
+          <button class="btn" onClick=${()=>toggleAssumeOk(selRoom)}>
+            ${roomState.assumeOk ? "Asumir resto OK: Sí" : "Asumir resto OK: No"}
+          </button>
           <button class="btn-danger" onClick=${()=>resetRoom(selRoom)}>Reiniciar habitación</button>
         </div>
+
         <section class="card">
-          <h3 style="font-size:16px;font-weight:600">Checklist</h3>
+          <h3 class="section-title" style="font-size:16px;font-weight:600">
+            <span>Incidencias</span>
+            <${AddIncidencia} room=${selRoom} remaining=${remainingItemsFor(selRoom)} onAdd=${id=>addIncidencia(selRoom,id)} />
+          </h3>
           <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-top:8px">
-            ${CHECKS.map(c=>{
-              const r=state[selRoom]||{}; const cur=(r.items||{})[c.id]||"none"; const note=(r.itemNotes||{})[c.id]||"";
+            ${visibleItemsFor(selRoom).map(id=>{
+              const c = CHECKS.find(x=>x.id===id) || {label:id};
+              const r=state[selRoom]||{}; const cur=(r.items||{})[id]||"none"; const note=(r.itemNotes||{})[id]||"";
               return html`<div class="card" style="margin-top:0;padding:10px">
-                <div style="font-size:14px;margin-bottom:8px">${c.label}</div>
-                <div class="item-row">
+                <div style="display:flex;align-items:center;gap:8px;justify-content:space-between">
+                  <div style="font-size:14px">${c.label}</div>
+                  <button class="btn" onClick=${()=>quitarIncidencia(selRoom,id)}>Quitar</button>
+                </div>
+                <div class="item-row" style="margin-top:8px">
                   <div>
-                    ${["ok","fail","pending","none"].map(s=>html`<button class="pill" onClick=${()=>setItem(selRoom,c.id,s)} style=${pillStyle(s, s===cur)}>${s==="none"?"Borrar":labelState(s)}</button>`)}
+                    ${["fail","pending"].map(s=>html`<button class="pill" onClick=${()=>setItem(selRoom,id,s)} style=${pillStyle(s, s===cur)}>${labelState(s)}</button>`)}
                   </div>
-                  <input class="note small" placeholder="Observación del elemento" value=${note} onInput=${e=>setItemNote(selRoom,c.id,e.target.value)} />
+                  <input class="note small" placeholder="Observación del elemento" value=${note} onInput=${e=>setItemNote(selRoom,id,e.target.value)} />
                 </div>
               </div>`;
             })}
+            ${visibleItemsFor(selRoom).length===0 && html`<div class="kv">Sin incidencias añadidas.</div>`}
           </div>
         </section>
+
         <section class="card">
           <h3 class="section-title" style="font-size:16px;font-weight:600">Medidas para sustituciones</h3>
           <${MeasureForm} onAdd=${m=>addMeasure(selRoom,m)} />
@@ -334,20 +377,29 @@ export default function App(){
             ${(!(state[selRoom]?.measures)||state[selRoom].measures.length===0) && html`<li style="color:#64748b">Sin medidas aún.</li>`}
           </ul>
         </section>
+
         <section class="card">
           <h3 style="font-size:16px;font-weight:600">Observaciones</h3>
           <textarea value=${(state[selRoom]?.notes)||""} onInput=${e=>setNotes(selRoom,e.target.value)} placeholder="Detalles puntuales…" style="width:100%;min-height:90px"></textarea>
         </section>
-        <section class="container" style="padding-left:0">
-          <span>Estado global:</span>
-          ${["ok","fail","pending","auto"].map(s=>html`<button class="pill" onClick=${()=>setOverallState(selRoom,s)} style=${pillStyle(s, s!=="auto")}>${labelState(s)}</button>`)}
-        </section>
-      </main>`}
 
-      <footer class="container">${APP_VERSION} — Perfiles locales, Importar/Exportar, filtros, “Marcar todo OK”.</footer>
+        <footer class="container">${APP_VERSION} — Modo incidencias activado.</footer>
+      </main>`}
     </div>`;
 }
 
+function AddIncidencia({ room, remaining, onAdd }){
+  const [sel,setSel]=useState(remaining[0]?.id||"");
+  useEffect(()=>{ if (!remaining.find(x=>x.id===sel)) setSel(remaining[0]?.id||""); },[remaining]);
+  return html`<div style="display:flex;gap:6px;align-items:center">
+    <select value=${sel||""} onChange=${e=>setSel(e.target.value)}>
+      ${(remaining.length?remaining:[{id:"",label:"(Sin puntos disponibles)"}]).map(c=>html`<option value=${c.id}>${c.label}</option>`)}
+    </select>
+    <button class=${remaining.length?"btn":"btn-disabled"} disabled=${!remaining.length} onClick=${()=>sel && onAdd(sel)}>Añadir punto</button>
+  </div>`;
+}
+
+/*** Reutilizados ***/
 function ParteView({ parte, onPrint, onCSV }){
   const byId=id=>({A:"A",B:"B",C:"C",D:"D",V:"VILLAS"}[id]||id);
   return html`<main class="container">
