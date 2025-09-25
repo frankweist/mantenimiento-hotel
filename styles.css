@@ -1,0 +1,35 @@
+
+:root{
+  --bg:#f8fafc; --text:#0f172a; --muted:#475569;
+  --b:#e2e8f0; --b2:#cbd5e1; --ok:#10b981; --fail:#ef4444; --rev:#f59e0b; --none:#e5e7eb; --white:#ffffff;
+  --brand:#0a4077;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif}
+.hidden{display:none}
+.container{max-width:1100px;margin:0 auto;padding:12px}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px}
+h1{font-size:22px;font-weight:600;margin:0}
+h2{font-size:18px;font-weight:600;margin:0}
+select,input,textarea,button{font:inherit}
+select,input,textarea{padding:8px 10px;border:1px solid var(--b2);border-radius:10px;background:#fff}
+input.small{padding:6px 8px;font-size:13px}
+button{border-radius:10px;border:1px solid transparent;padding:8px 12px;cursor:pointer}
+.btn{background:#e2e8f0}
+.btn-light{background:#fff;border:1px solid var(--b2)}
+.btn-primary{background:var(--brand);border:1px solid var(--brand);color:#fff;font-weight:600}
+.btn-danger{background:#ef4444;border:1px solid #ef4444;color:#fff;font-weight:600}
+.btn-disabled{background:#e2e8f0;border:1px solid var(--b2);color:#64748b;cursor:not-allowed}
+.grid{display:grid;gap:12px}
+.plan{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.tile{min-height:140px;border:1px solid var(--b2);border-radius:16px;padding:16px;display:flex;align-items:center;justify-content:center;text-align:center;font-weight:700;background:#fff;color:var(--text)}
+.rooms{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:12px}
+.room{border:1px solid var(--b);border-radius:10px;padding:10px 12px;font-weight:700}
+.card{background:#fff;border:1px solid var(--b);border-radius:12px;padding:12px;margin-top:12px}
+.kv{font-size:12px;color:var(--muted)}
+.progress{height:8px;border-radius:6px;background:#e5e7eb;overflow:hidden;border:1px solid #cbd5e1}
+.badge{border:1px solid var(--b2);border-radius:999px;padding:6px 10px;background:#fff;cursor:pointer}
+.badge.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+
+#error-overlay{position:fixed;inset:0;background:rgba(255,255,255,.95);color:#111;padding:18px;overflow:auto;z-index:9999}
+#error-overlay pre{white-space:pre-wrap;background:#fee2e2;border:1px solid #ef4444;padding:10px;border-radius:8px}
