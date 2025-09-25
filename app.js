@@ -1,12 +1,13 @@
 
 import { h, render } from "https://esm.sh/preact@10.22.0";
-import { useState, useEffect, useMemo } from "https://esm.sh/preact@10.22.0/hooks";
+import { useState, useEffect, useMemo, useRef } from "https://esm.sh/preact@10.22.0/hooks";
 import htm from "https://esm.sh/htm@3.1.1";
 const html = htm.bind(h);
 
 /*** Constantes ***/
 const GLOBAL_LS = { users:"mh_users_v1", current:"mh_user_current_v1" };
 const LEGACY = "mh_v1_state";
+const APP_VERSION = "v1.2-local";
 
 const BLOQUES = [
   { id: "A", label: "A", from: 2100, to: 2107 },
@@ -127,6 +128,7 @@ export default function App(){
   const [selBlock,setSelBlockState]=useState(null);
   const [selRoom,setSelRoomState]=useState(null);
   const [filter,setFilter]=useState("");
+  const [statusFilter,setStatusFilter]=useState("all");
   const [state,setState]=usePersistByUser(user.aliasLower);
 
   useEffect(()=>{
@@ -144,7 +146,7 @@ export default function App(){
   },[user.aliasLower,user.profile]);
 
   const goPlan=()=>setRouteTo(null,null);
-  const goBlock=b=>setRouteTo(b.id,null);
+  const goBlock=b=>{ setStatusFilter("all"); setFilter(""); setRouteTo(b.id,null); };
   const goRoom=n=>setRouteTo(selBlock.id,n);
   const goParte=()=>setRouteTo("parte");
   const goCuenta=()=>setRouteTo("cuenta");
@@ -164,6 +166,13 @@ export default function App(){
   const addMeasure=(room,m)=>setState(prev=>({...prev,[room]:{...(prev[room]||{items:{},itemNotes:{},notes:""}),measures:[...(prev[room]?.measures||[]),m],overall:prev[room]?.overall||"auto"}}));
   const delMeasure=(room,idx)=>setState(prev=>({...prev,[room]:{...(prev[room]||{items:{},itemNotes:{},notes:""}),measures:(prev[room]?.measures||[]).filter((_,i)=>i!==idx)}}));
   const resetRoom=(room)=>setState(prev=>({...prev,[room]:{items:{},itemNotes:{},notes:"",measures:[],overall:"auto"}}));
+  const markAllOk=(room)=>{
+    setState(prev=>{
+      const items={...(prev[room]?.items||{})};
+      for (const c of CHECKS){ items[c.id]="ok"; }
+      return {...prev, [room]:{ items, itemNotes:prev[room]?.itemNotes||{}, notes:prev[room]?.notes||"", measures:prev[room]?.measures||[], overall:"auto" }};
+    });
+  };
 
   const parte = useMemo(()=>{
     const byBlock={};
@@ -214,6 +223,29 @@ export default function App(){
     a.href=URL.createObjectURL(blob); a.download=`parte_${alias}_${nowISO().replace(/[: ]/g,'-')}.csv`; document.body.appendChild(a); a.click(); a.remove();
   }
 
+  // Importar / Exportar perfil
+  function exportPerfil(){
+    const alias=user.profile?.alias||"anon";
+    const data = localStorage.getItem(nsKey(user.aliasLower)) || "{}";
+    const payload = { type:"mh-profile", version:APP_VERSION, alias, storedAt: new Date().toISOString(), data: JSON.parse(data) };
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob); a.download=`mh-${alias}-${nowISO().replace(/[: ]/g,'-')}.mhjson`; document.body.appendChild(a); a.click(); a.remove();
+  }
+  function importPerfil(file){
+    const fr=new FileReader();
+    fr.onload=()=>{
+      try{
+        const payload=JSON.parse(fr.result);
+        if (!payload || !payload.data){ alert("Archivo inválido"); return; }
+        localStorage.setItem(nsKey(user.aliasLower), JSON.stringify(payload.data));
+        location.reload();
+      }catch(e){ alert("No se pudo importar"); }
+    };
+    fr.readAsText(file);
+  }
+
+  // Vistas
   if (!user.profile || page==="auth"){ return html`<${AuthView} user=${user} onReady=${()=>{ setRouteTo(null,null); }}/>`; }
 
   const blockRooms = useMemo(()=>{
@@ -222,17 +254,26 @@ export default function App(){
     return Array.from({length:b.to-b.from+1},(_,i)=>b.from+i);
   },[selBlock]);
 
-  return html`<div>
-    <${Header} page=${page} selBlock=${selBlock} selRoom=${selRoom} goPlan=${()=>setRouteTo(null,null)}
-      goBlock=${b=>setRouteTo(b.id,null)} goParte=${()=>setRouteTo("parte")} goCuenta=${()=>setRouteTo("cuenta")} user=${user} />
+  const filteredRooms = useMemo(()=>{
+    if (!selBlock) return [];
+    const rooms = blockRooms.filter(n=>n.toString().includes(filter.trim()));
+    if (statusFilter==="all") return rooms;
+    return rooms.filter(n=>{
+      const r=state[n]||{}; const o=(r.overall && r.overall!=="auto")? r.overall : autoOverallFromRoom(r);
+      return o===statusFilter;
+    });
+  },[blockRooms, filter, statusFilter, state, selBlock]);
 
-    ${page==="cuenta" && html`<${CuentaView} user=${user} />`}
-    ${page==="parte" && html`<${ParteView} parte=${parte} />`}
+  return html`<div>
+    <${Header} page=${page} selBlock=${selBlock} selRoom=${selRoom} goPlan=${goPlan} goBlock=${goBlock} goParte=${goParte} goCuenta=${goCuenta} user=${user} />
+
+    ${page==="cuenta" && html`<${CuentaView} user=${user} onExport=${exportPerfil} onImport=${importPerfil} />`}
+    ${page==="parte" && html`<${ParteView} parte=${parte} onPrint=${()=>window.print()} onCSV=${exportCSV} />`}
 
     ${page!=="parte" && page!=="cuenta" && !selBlock && html`
       <main class="container">
         <div class="plan">
-          ${BLOQUES.map(b=>html`<${BlockTile} key=${b.id} b=${b} state=${state} onClick=${()=>setRouteTo(b.id,null)} />`)}
+          ${BLOQUES.map(b=>html`<${BlockTile} key=${b.id} b=${b} state=${state} onClick=${()=>goBlock(b)} />`)}
         </div>
         <p class="kv" style="margin-top:10px">Usuario: ${user.profile.alias}. Pulsa un bloque para ver sus residencias.</p>
       </main>`}
@@ -240,11 +281,18 @@ export default function App(){
     ${page!=="parte" && page!=="cuenta" && selBlock && selRoom==null && html`
       <main class="container">
         <h2 style="margin-top:8px;font-size:18px;font-weight:600">Bloque ${selBlock.label}</h2>
-        <div style="margin-top:8px"><input placeholder="Filtrar número…" value=${filter} onInput=${e=>setFilter(e.target.value)} /></div>
+        <div class="toolbar">
+          <input placeholder="Filtrar número…" value=${filter} onInput=${e=>setFilter(e.target.value)} />
+          <span class=${`badge ${statusFilter==='all'?'active':''}`} onClick=${()=>setStatusFilter('all')}>Todos</span>
+          <span class=${`badge ${statusFilter==='fail'?'active':''}`} onClick=${()=>setStatusFilter('fail')}>Fallo</span>
+          <span class=${`badge ${statusFilter==='pending'?'active':''}`} onClick=${()=>setStatusFilter('pending')}>Por revisar</span>
+          <span class=${`badge ${statusFilter==='ok'?'active':''}`} onClick=${()=>setStatusFilter('ok')}>OK</span>
+          <span class=${`badge ${statusFilter==='none'?'active':''}`} onClick=${()=>setStatusFilter('none')}>Sin marcar</span>
+        </div>
         <div class="rooms">
-          ${blockRooms.filter(n=>n.toString().includes(filter.trim())).map(n=>{
+          ${filteredRooms.map(n=>{
             const r=state[n]||{}; const overall=(r.overall && r.overall!=="auto")? r.overall : autoOverallFromRoom(r);
-            return html`<${RoomChip} key=${n} n=${n} overall=${overall} onClick=${()=>setRouteTo(selBlock.id,n)} />`;
+            return html`<${RoomChip} key=${n} n=${n} overall=${overall} onClick=${()=>goRoom(n)} />`;
           })}
         </div>
       </main>`}
@@ -254,6 +302,7 @@ export default function App(){
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <h2 style="font-size:18px;font-weight:600">Residencia ${selRoom}</h2>
           <span class="pill" style=${`margin-left:auto;background:${overall==="auto"?"#334155":(COLORS[overall]||COLORS.none)};color:${COLORS.white}`}>${labelState(overall)}</span>
+          <button class="btn" onClick=${()=>markAllOk(selRoom)}>Marcar todo OK</button>
           <button class="btn-danger" onClick=${()=>resetRoom(selRoom)}>Reiniciar habitación</button>
         </div>
         <section class="card">
@@ -295,14 +344,20 @@ export default function App(){
         </section>
       </main>`}
 
-      <footer class="container">v1.1 — Perfiles locales. Datos aislados por usuario.</footer>
+      <footer class="container">${APP_VERSION} — Perfiles locales, Importar/Exportar, filtros, “Marcar todo OK”.</footer>
     </div>`;
 }
 
-function ParteView({ parte }){
+function ParteView({ parte, onPrint, onCSV }){
   const byId=id=>({A:"A",B:"B",C:"C",D:"D",V:"VILLAS"}[id]||id);
   return html`<main class="container">
-    <h2 style="font-size:18px;font-weight:600">Parte de trabajo</h2>
+    <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+      <h2 style="font-size:18px;font-weight:600">Parte de trabajo</h2>
+      <div>
+        <button class="btn" onClick=${onPrint}>Imprimir</button>
+        <button class="btn-primary" onClick=${onCSV}>Exportar CSV</button>
+      </div>
+    </div>
     ${Object.entries(parte).map(([bid, entries])=>html`
       <section class="card">
         <h3 style="font-size:16px;font-weight:600">Bloque ${byId(bid)}</h3>
@@ -407,41 +462,32 @@ function AuthView({ user, onReady }){
   </main>`;
 }
 
-function CuentaView({ user }){
-  const [alias,setAlias]=useState(""); const [pin,setPin]=useState(""); const [msg,setMsg]=useState("");
-  const users=loadUsers();
+function CuentaView({ user, onExport, onImport }){
+  const fileRef = useRef(null);
   function logout(){ setCurrent(null); user.setAliasLower(null); location.hash="#/auth"; }
   function delProfile(a){
+    const users=loadUsers();
     const key=a.toLowerCase();
     if(!confirm(`Eliminar perfil ${a}?`)) return;
     delete users[key]; saveUsers(users);
     if(user.aliasLower===key){ logout(); }
   }
-  function create(){
-    const a=alias.trim(); const p=pin.trim();
-    if(!a||!p){ setMsg("Alias y PIN requeridos"); return; }
-    const key=a.toLowerCase(); if(users[key]){ setMsg("Ya existe"); return; }
-    users[key]={alias:a,pinHash:hashPIN(p),createdAt:new Date().toISOString()}; saveUsers(users); setMsg("Creado");
-  }
   return html`<main class="container">
     <div class="card">
       <h3>Usuario actual: ${user.profile?.alias||"—"}</h3>
-      <div class="kv">Cambiar o gestionar perfiles locales.</div>
-      <div style="margin-top:10px">
+      <div class="kv">Gestiona perfiles, copia de seguridad y migración.</div>
+      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-primary" onClick=${()=>{ location.hash="#/auth"; }}>Cambiar usuario</button>
-        <button class="btn" style="margin-left:8px" onClick=${logout}>Cerrar sesión</button>
+        <button class="btn" onClick=${logout}>Cerrar sesión</button>
+        <button class="btn" onClick=${onExport}>Exportar datos (.mhjson)</button>
+        <input type="file" accept=".mhjson,application/json" style="display:none" ref=${fileRef} onChange=${e=>{ const f=e.target.files?.[0]; if(f) onImport(f); }} />
+        <button class="btn" onClick=${()=>fileRef.current && fileRef.current.click()}>Importar datos</button>
       </div>
     </div>
     <div class="card">
       <h3>Perfiles</h3>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${Object.values(loadUsers()).map(u=>html`<span class="pill">${u.alias} <button class="btn" onClick=${()=>delProfile(u.alias)} style="margin-left:8px">Eliminar</button></span>`)}
-      </div>
-      <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-        <input class="small" placeholder="Nuevo alias" value=${alias} onInput=${e=>setAlias(e.target.value)} />
-        <input class="small" placeholder="PIN" value=${pin} onInput=${e=>setPin(e.target.value)} />
-        <button class="btn-primary" onClick=${create}>Crear</button>
-        ${msg && html`<span class="kv">${msg}</span>`}
       </div>
     </div>
   </main>`;

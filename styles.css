@@ -32,4 +32,7 @@ footer{color:#64748b;font-size:12px}
 .section-title{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .item-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .item-row .note{flex:1 1 200px}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.badge{border:1px solid var(--b2);border-radius:999px;padding:6px 10px;background:#fff;cursor:pointer}
+.badge.active{background:var(--brand);color:#fff;border-color:var(--brand)}
 .auth{max-width:440px;margin:64px auto;background:#fff;border:1px solid var(--b2);border-radius:14px;padding:16px}
