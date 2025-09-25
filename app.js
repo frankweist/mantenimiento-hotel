@@ -1,13 +1,65 @@
 
-import { h, render } from "https://esm.sh/preact@10.22.0";
-import { useState, useEffect, useMemo, useRef } from "https://esm.sh/preact@10.22.0/hooks";
-import htm from "https://esm.sh/htm@3.1.1";
-const html = htm.bind(h);
+// Boot watchdog y captura de errores globales
+const boot = { mounted:false };
+const bootMsg = document.getElementById('boot-msg');
+const overlay = document.getElementById('error-overlay');
+const errlog = document.getElementById('errlog');
+function showError(e){
+  if (errlog) errlog.textContent = (e && (e.stack||e.message||e.toString())) || String(e);
+  if (overlay) overlay.style.display = 'block';
+  if (bootMsg) bootMsg.style.display = 'none';
+}
+window.addEventListener('error', ev => showError(ev.error||ev.message));
+window.addEventListener('unhandledrejection', ev => showError(ev.reason||ev));
 
-/*** Constantes ***/
+setTimeout(()=>{
+  if (!boot.mounted){
+    showError(new Error('Timeout cargando módulos. Puede ser caché o CDN.'));
+  }
+}, 6000);
+
+// Import dinámico con fallback
+async function importWithFallback(urls){
+  let lastErr;
+  for (const u of urls){
+    try{
+      const m = await import(/* @vite-ignore */ u);
+      return m;
+    }catch(e){
+      lastErr = e;
+      // intenta siguiente
+    }
+  }
+  throw lastErr || new Error('No se pudo importar módulos');
+}
+
+const PREACT_URLS = [
+  'https://esm.sh/preact@10.22.0',
+  'https://cdn.jsdelivr.net/npm/preact@10.22.0/dist/preact.module.js',
+  'https://unpkg.com/preact@10.22.0/dist/preact.module.js'
+];
+const HOOKS_URLS = [
+  'https://esm.sh/preact@10.22.0/hooks',
+  'https://cdn.jsdelivr.net/npm/preact@10.22.0/hooks/dist/hooks.module.js',
+  'https://unpkg.com/preact@10.22.0/hooks/dist/hooks.module.js'
+];
+const HTM_URLS = [
+  'https://esm.sh/htm@3.1.1',
+  'https://cdn.jsdelivr.net/npm/htm@3.1.1/dist/htm.module.js',
+  'https://unpkg.com/htm@3.1.1/dist/htm.module.js'
+];
+
+const [{ h, render }, { useState, useEffect, useMemo, useRef }, htm] = await Promise.all([
+  importWithFallback(PREACT_URLS),
+  importWithFallback(HOOKS_URLS),
+  importWithFallback(HTM_URLS)
+]);
+const html = htm.default.bind(h);
+
+// App real (copiada de v1.3-local-incidencias con mínimos cambios)
 const GLOBAL_LS = { users:"mh_users_v1", current:"mh_user_current_v1" };
 const LEGACY = "mh_v1_state";
-const APP_VERSION = "v1.3-local-incidencias";
+const APP_VERSION = "v1.3.1-local-incidencias-robusto";
 
 const BLOQUES = [
   { id: "A", label: "A", from: 2100, to: 2107 },
@@ -39,7 +91,6 @@ const nsKey = a => `mh_v1_${a}_state`;
 const hashPIN = pin => { let h=5381; for (let i=0;i<pin.length;i++){ h=((h<<5)+h)+pin.charCodeAt(i); h|=0; } return "h"+(h>>>0).toString(16); };
 const nowISO = () => { const d=new Date(); const p=n=>String(n).padStart(2,"0"); return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
 
-/*** Lógica de estado global por habitación ***/
 function autoOverallFromRoom(room){
   const items = room?.items || {};
   const vals = Object.values(items).filter(v => v !== "none");
@@ -48,11 +99,9 @@ function autoOverallFromRoom(room){
   const anyItemNote = !!room?.itemNotes && Object.values(room.itemNotes).some(t => (t||"").trim().length>0);
   const anyRoomNote = !!(room?.notes||"").trim().length;
   if (hasFail) return "fail";
-  if (!hasFail && !hasPend && (anyItemNote || anyRoomNote)) return "fail"; // observaciones ⇒ fallo
+  if (!hasFail && !hasPend && (anyItemNote || anyRoomNote)) return "fail";
   if (hasPend) return "pending";
-  if (vals.length===0){
-    return room?.assumeOk ? "ok" : "none";
-  }
+  if (vals.length===0) return room?.assumeOk ? "ok" : "none";
   return "ok";
 }
 
@@ -91,7 +140,7 @@ function parseHash(){
   return {page:"plan",block,room};
 }
 const setRouteTo=(pg,room)=>{
-  if (pg==="parte"||pg==="cuenta"||pg==="auth"){ location.hash = `#/${pg}`; return; }
+  if (pg==="parte"||"cuenta"===pg||"auth"===pg){ location.hash = `#/${pg}`; return; }
   const block=pg;
   if (!block) location.hash=""; else if (!room) location.hash=`#/${block}`; else location.hash=`#/${block}/${room}`;
 }
@@ -110,23 +159,23 @@ function pillStyle(type, selected){
 
 /*** Componentes ***/
 function Header({ page, selBlock, selRoom, goPlan, goBlock, goParte, goCuenta, user }){
-  return html`<header class="container">
-    <h1>Mantenimiento Hotel · Residences</h1>
-    <div class="actions">
+  return html`<header class="container" style="max-width:1100px;margin:0 auto;padding:12px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+    <h1 style="font-size:22px;margin:0">Mantenimiento Hotel · Residences</h1>
+    <div style="display:flex;gap:8px;align-items:center">
       ${page==="parte"
-        ? html`<button class="btn-light" onClick=${goPlan}>← Plano</button>`
+        ? html`<button onClick=${goPlan}>← Plano</button>`
         : selRoom!=null
-          ? html`<button class="btn-light" onClick=${()=>goBlock(selBlock)}>← Residencias</button>`
+          ? html`<button onClick=${()=>goBlock(selBlock)}>← Residencias</button>`
           : selBlock
-            ? html`<button class="btn-light" onClick=${goPlan}>← Plano</button>`
+            ? html`<button onClick=${goPlan}>← Plano</button>`
             : null}
-      <button class="btn" onClick=${goParte}>Parte</button>
-      <button class="btn-primary" onClick=${goCuenta}>${user?.profile?`Usuario: ${user.profile.alias}`:"Acceder"}</button>
+      <button onClick=${goParte}>Parte</button>
+      <button onClick=${goCuenta}>${user?.profile?`Usuario: ${user.profile.alias}`:"Acceder"}</button>
     </div>
   </header>`;
 }
 
-export default function App(){
+function App(){
   const user = useUser();
   const [page,setPage]=useState("plan");
   const [selBlock,setSelBlockState]=useState(null);
@@ -148,6 +197,8 @@ export default function App(){
     window.addEventListener("hashchange",apply); apply();
     return ()=>window.removeEventListener("hashchange",apply);
   },[user.aliasLower,user.profile]);
+
+  useEffect(()=>{ boot.mounted = true; if (bootMsg) bootMsg.style.display='none'; },[]);
 
   const goPlan=()=>setRouteTo(null,null);
   const goBlock=b=>{ setStatusFilter("all"); setFilter(""); setRouteTo(b.id,null); };
@@ -175,9 +226,9 @@ export default function App(){
     }));
   }
   const setOverallState=(room,value)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",measures:[],assumeOk:false}), overall:value }}));
-  const setNotes=(room,value)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},measures:[],assumeOk:false}), notes:value, overall: prev[room]?.overall || "auto" }}));
-  const addMeasure=(room,m)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",assumeOk:false}), measures:[ ...(prev[room]?.measures||[]), m ], overall: prev[room]?.overall || "auto" }}));
-  const delMeasure=(room,idx)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",assumeOk:false}), measures:(prev[room]?.measures||[]).filter((_,i)=>i!==idx) }}));
+  const setNotes=(room,value)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},measures:[]}), notes:value, overall: prev[room]?.overall || "auto" }}));
+  const addMeasure=(room,m)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:""}), measures:[ ...(prev[room]?.measures||[]), m ], overall: prev[room]?.overall || "auto" }}));
+  const delMeasure=(room,idx)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:""}), measures:(prev[room]?.measures||[]).filter((_,i)=>i!==idx) }}));
   const resetRoom=(room)=>setState(prev=>({...prev, [room]:{ items:{}, itemNotes:{}, notes:"", measures:[], overall:"auto", assumeOk:false } }));
   const toggleAssumeOk=(room)=>setState(prev=>({...prev, [room]:{ ...(prev[room]||{items:{},itemNotes:{},notes:"",measures:[]}), assumeOk: !(prev[room]?.assumeOk) }}));
 
@@ -223,7 +274,6 @@ export default function App(){
     return byBlock;
   },[state]);
 
-  // Export CSV
   function exportCSV(){
     const rows=[["Usuario","Bloque","Residencia","Tipo","Elemento","Detalle","Medidas","Notas"]];
     const alias=user.profile?.alias||"anon";
@@ -243,7 +293,6 @@ export default function App(){
     a.href=URL.createObjectURL(blob); a.download=`parte_${alias}_${nowISO().replace(/[: ]/g,'-')}.csv`; document.body.appendChild(a); a.click(); a.remove();
   }
 
-  // Importar / Exportar perfil
   function exportPerfil(){
     const alias=user.profile?.alias||"anon";
     const data = localStorage.getItem(nsKey(user.aliasLower)) || "{}";
@@ -265,7 +314,6 @@ export default function App(){
     fr.readAsText(file);
   }
 
-  // Vistas
   if (!user.profile || page==="auth"){ return html`<${AuthView} user=${user} onReady=${()=>{ setRouteTo(null,null); }}/>`; }
 
   const blockRooms = useMemo(()=>{
@@ -284,7 +332,64 @@ export default function App(){
     });
   },[blockRooms, filter, statusFilter, state, selBlock]);
 
-  // Helpers para incidencias visibles
+  return html`<div>
+    <${Header} page=${page} selBlock=${selBlock} selRoom=${selRoom} goPlan=${goPlan} goBlock=${goBlock} goParte=${goParte} goCuenta=${goCuenta} user=${user} />
+    ${page==="cuenta" && html`<${CuentaView} user=${user} onExport=${exportPerfil} onImport=${importPerfil} />`}
+    ${page==="parte" && html`<${ParteView} parte=${parte} onPrint=${()=>window.print()} onCSV=${exportCSV} />`}
+    ${page!=="parte" && page!=="cuenta" && !selBlock && html`
+      <main class="container" style="max-width:1100px;margin:0 auto;padding:12px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          ${BLOQUES.map(b=>html`<${BlockTile} key=${b.id} b=${b} state=${state} onClick=${()=>goBlock(b)} />`)}
+        </div>
+        <p style="margin-top:10px;font-size:12px;color:#475569">Usuario: ${user.profile.alias}. Pulsa un bloque para ver sus residencias.</p>
+      </main>`}
+    ${page!=="parte" && page!=="cuenta" && selBlock && selRoom==null && html`
+      <main class="container" style="max-width:1100px;margin:0 auto;padding:12px">
+        <h2 style="margin-top:8px;font-size:18px;font-weight:600">Bloque ${selBlock.label}</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:8px 0">
+          <input placeholder="Filtrar número…" value=${filter} onInput=${e=>setFilter(e.target.value)} />
+          ${["all","fail","pending","ok","none"].map(s=>html`
+            <button onClick=${()=>setStatusFilter(s)} style=${`border:1px solid #cbd5e1;border-radius:999px;padding:6px 10px;background:${statusFilter===s?'#0a4077':'#fff'};color:${statusFilter===s?'#fff':'#111'}`}>${s}</button>
+          `)}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:12px">
+          ${filteredRooms.map(n=>{
+            const r=state[n]||{}; const overall=(r.overall && r.overall!=="auto")? r.overall : autoOverallFromRoom(r);
+            return html`<${RoomChip} key=${n} n=${n} overall=${overall} onClick=${()=>goRoom(n)} />`;
+          })}
+        </div>
+      </main>`}
+    ${page!=="parte" && page!=="cuenta" && selRoom!=null && html`
+      <main class="container" style="max-width:1100px;margin:0 auto;padding:12px">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <h2 style="font-size:18px;font-weight:600">Residencia ${selRoom}</h2>
+          <span style=${`margin-left:auto;background:${overall==="auto"?"#334155":(COLORS[overall]||COLORS.none)};color:#fff;border-radius:999px;padding:4px 8px`}>${labelState(overall)}</span>
+          <button onClick=${()=>toggleAssumeOk(selRoom)}>${roomState.assumeOk ? "Asumir resto OK: Sí" : "Asumir resto OK: No"}</button>
+          <button onClick=${()=>resetRoom(selRoom)}>Reiniciar habitación</button>
+        </div>
+        <${IncidenciasView} selRoom=${selRoom} state=${state} setItem=${setItem} setItemNote=${setItemNote} addIncidencia=${addIncidencia} quitarIncidencia=${quitarIncidencia} />
+        <section style="background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:12px;margin-top:12px">
+          <h3 style="font-size:16px;font-weight:600">Medidas para sustituciones</h3>
+          <${MeasureForm} onAdd=${m=>addMeasure(selRoom,m)} />
+          <ul style="margin-top:8px;padding-left:18px">
+            ${(state[selRoom]?.measures||[]).map((m,idx)=>html`<li style="margin-bottom:4px">
+              <span style="font-family:monospace">[${m.tipo}] ${m.medida}</span>
+              ${m.detalle?html`<span> — ${m.detalle}</span>`:null}
+              <button style="margin-left:8px" onClick=${()=>delMeasure(selRoom,idx)}>Eliminar</button>
+            </li>`)}
+            ${(!(state[selRoom]?.measures)||state[selRoom].measures.length===0) && html`<li style="color:#64748b">Sin medidas aún.</li>`}
+          </ul>
+        </section>
+        <section style="background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:12px;margin-top:12px">
+          <h3 style="font-size:16px;font-weight:600">Observaciones</h3>
+          <textarea value=${(state[selRoom]?.notes)||""} onInput=${e=>setNotes(selRoom,e.target.value)} placeholder="Detalles puntuales…" style="width:100%;min-height:90px"></textarea>
+        </section>
+        <footer class="container" style="color:#64748b;font-size:12px;padding:12px 0">${APP_VERSION}</footer>
+      </main>`}
+    </div>`;
+}
+
+function IncidenciasView({ selRoom, state, setItem, setItemNote, addIncidencia, quitarIncidencia }){
   function visibleItemsFor(room){
     const r = state[room] || {};
     const items = r.items || {};
@@ -294,134 +399,63 @@ export default function App(){
     const visible = new Set(visibleItemsFor(room));
     return CHECKS.filter(c => !visible.has(c.id));
   }
-
-  return html`<div>
-    <${Header} page=${page} selBlock=${selBlock} selRoom=${selRoom} goPlan=${goPlan} goBlock=${goBlock} goParte=${goParte} goCuenta=${goCuenta} user=${user} />
-
-    ${page==="cuenta" && html`<${CuentaView} user=${user} onExport=${exportPerfil} onImport=${importPerfil} />`}
-    ${page==="parte" && html`<${ParteView} parte=${parte} onPrint=${()=>window.print()} onCSV=${exportCSV} />`}
-
-    ${page!=="parte" && page!=="cuenta" && !selBlock && html`
-      <main class="container">
-        <div class="plan">
-          ${BLOQUES.map(b=>html`<${BlockTile} key=${b.id} b=${b} state=${state} onClick=${()=>goBlock(b)} />`)}
-        </div>
-        <p class="kv" style="margin-top:10px">Usuario: ${user.profile.alias}. Pulsa un bloque para ver sus residencias.</p>
-      </main>`}
-
-    ${page!=="parte" && page!=="cuenta" && selBlock && selRoom==null && html`
-      <main class="container">
-        <h2 style="margin-top:8px;font-size:18px;font-weight:600">Bloque ${selBlock.label}</h2>
-        <div class="toolbar">
-          <input placeholder="Filtrar número…" value=${filter} onInput=${e=>setFilter(e.target.value)} />
-          <span class=${`badge ${statusFilter==='all'?'active':''}`} onClick=${()=>setStatusFilter('all')}>Todos</span>
-          <span class=${`badge ${statusFilter==='fail'?'active':''}`} onClick=${()=>setStatusFilter('fail')}>Fallo</span>
-          <span class=${`badge ${statusFilter==='pending'?'active':''}`} onClick=${()=>setStatusFilter('pending')}>Por revisar</span>
-          <span class=${`badge ${statusFilter==='ok'?'active':''}`} onClick=${()=>setStatusFilter('ok')}>OK</span>
-          <span class=${`badge ${statusFilter==='none'?'active':''}`} onClick=${()=>setStatusFilter('none')}>Sin marcar</span>
-        </div>
-        <div class="rooms">
-          ${filteredRooms.map(n=>{
-            const r=state[n]||{}; const overall=(r.overall && r.overall!=="auto")? r.overall : autoOverallFromRoom(r);
-            return html`<${RoomChip} key=${n} n=${n} overall=${overall} onClick=${()=>goRoom(n)} />`;
-          })}
-        </div>
-      </main>`}
-
-    ${page!=="parte" && page!=="cuenta" && selRoom!=null && html`
-      <main class="container">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <h2 style="font-size:18px;font-weight:600">Residencia ${selRoom}</h2>
-          <span class="pill" style=${`margin-left:auto;background:${overall==="auto"?"#334155":(COLORS[overall]||COLORS.none)};color:${COLORS.white}`}>${labelState(overall)}</span>
-          <button class="btn" onClick=${()=>toggleAssumeOk(selRoom)}>
-            ${roomState.assumeOk ? "Asumir resto OK: Sí" : "Asumir resto OK: No"}
-          </button>
-          <button class="btn-danger" onClick=${()=>resetRoom(selRoom)}>Reiniciar habitación</button>
-        </div>
-
-        <section class="card">
-          <h3 class="section-title" style="font-size:16px;font-weight:600">
-            <span>Incidencias</span>
-            <${AddIncidencia} room=${selRoom} remaining=${remainingItemsFor(selRoom)} onAdd=${id=>addIncidencia(selRoom,id)} />
-          </h3>
-          <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));margin-top:8px">
-            ${visibleItemsFor(selRoom).map(id=>{
-              const c = CHECKS.find(x=>x.id===id) || {label:id};
-              const r=state[selRoom]||{}; const cur=(r.items||{})[id]||"none"; const note=(r.itemNotes||{})[id]||"";
-              return html`<div class="card" style="margin-top:0;padding:10px">
-                <div style="display:flex;align-items:center;gap:8px;justify-content:space-between">
-                  <div style="font-size:14px">${c.label}</div>
-                  <button class="btn" onClick=${()=>quitarIncidencia(selRoom,id)}>Quitar</button>
-                </div>
-                <div class="item-row" style="margin-top:8px">
-                  <div>
-                    ${["fail","pending"].map(s=>html`<button class="pill" onClick=${()=>setItem(selRoom,id,s)} style=${pillStyle(s, s===cur)}>${labelState(s)}</button>`)}
-                  </div>
-                  <input class="note small" placeholder="Observación del elemento" value=${note} onInput=${e=>setItemNote(selRoom,id,e.target.value)} />
-                </div>
-              </div>`;
-            })}
-            ${visibleItemsFor(selRoom).length===0 && html`<div class="kv">Sin incidencias añadidas.</div>`}
+  const visibles = visibleItemsFor(selRoom);
+  const remaining = remainingItemsFor(selRoom);
+  const [sel,setSel] = useState(remaining[0]?.id||"");
+  return html`<section style="background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:12px;margin-top:12px">
+    <h3 style="font-size:16px;font-weight:600;display:flex;justify-content:space-between;align-items:center">
+      <span>Incidencias</span>
+      <span>
+        <select value=${sel||""} onChange=${e=>setSel(e.target.value)}>
+          ${(remaining.length?remaining:[{id:"",label:"(Sin puntos disponibles)"}]).map(c=>html`<option value=${c.id}>${c.label}</option>`)}
+        </select>
+        <button onClick=${()=>sel && addIncidencia(selRoom, sel)} disabled=${!remaining.length}>Añadir punto</button>
+      </span>
+    </h3>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:8px">
+      ${visibles.map(id=>{
+        const c = CHECKS.find(x=>x.id===id) || {label:id};
+        const r=state[selRoom]||{}; const cur=(r.items||{})[id]||"none"; const note=(r.itemNotes||{})[id]||"";
+        return html`<div style="border:1px solid #cbd5e1;border-radius:12px;padding:10px">
+          <div style="display:flex;align-items:center;gap:8px;justify-content:space-between">
+            <div style="font-size:14px">${c.label}</div>
+            <button onClick=${()=>quitarIncidencia(selRoom,id)}>Quitar</button>
           </div>
-        </section>
-
-        <section class="card">
-          <h3 class="section-title" style="font-size:16px;font-weight:600">Medidas para sustituciones</h3>
-          <${MeasureForm} onAdd=${m=>addMeasure(selRoom,m)} />
-          <ul style="margin-top:8px;padding-left:18px">
-            ${(state[selRoom]?.measures||[]).map((m,idx)=>html`<li style="margin-bottom:4px">
-              <span style="font-family:monospace">[${m.tipo}] ${m.medida}</span>
-              ${m.detalle?html`<span> — ${m.detalle}</span>`:null}
-              <button class="btn" style="margin-left:8px" onClick=${()=>delMeasure(selRoom,idx)}>Eliminar</button>
-            </li>`)}
-            ${(!(state[selRoom]?.measures)||state[selRoom].measures.length===0) && html`<li style="color:#64748b">Sin medidas aún.</li>`}
-          </ul>
-        </section>
-
-        <section class="card">
-          <h3 style="font-size:16px;font-weight:600">Observaciones</h3>
-          <textarea value=${(state[selRoom]?.notes)||""} onInput=${e=>setNotes(selRoom,e.target.value)} placeholder="Detalles puntuales…" style="width:100%;min-height:90px"></textarea>
-        </section>
-
-        <footer class="container">${APP_VERSION} — Modo incidencias activado.</footer>
-      </main>`}
-    </div>`;
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+            <div>
+              ${["fail","pending"].map(s=>html`<button onClick=${()=>setItem(selRoom,id,s)} style=${pillStyle(s, s===cur)}>${labelState(s)}</button>`)}
+            </div>
+            <input placeholder="Observación del elemento" value=${note} onInput=${e=>setItemNote(selRoom,id,e.target.value)} />
+          </div>
+        </div>`;
+      })}
+      ${visibles.length===0 && html`<div style="color:#64748b">Sin incidencias añadidas.</div>`}
+    </div>
+  </section>`;
 }
 
-function AddIncidencia({ room, remaining, onAdd }){
-  const [sel,setSel]=useState(remaining[0]?.id||"");
-  useEffect(()=>{ if (!remaining.find(x=>x.id===sel)) setSel(remaining[0]?.id||""); },[remaining]);
-  return html`<div style="display:flex;gap:6px;align-items:center">
-    <select value=${sel||""} onChange=${e=>setSel(e.target.value)}>
-      ${(remaining.length?remaining:[{id:"",label:"(Sin puntos disponibles)"}]).map(c=>html`<option value=${c.id}>${c.label}</option>`)}
-    </select>
-    <button class=${remaining.length?"btn":"btn-disabled"} disabled=${!remaining.length} onClick=${()=>sel && onAdd(sel)}>Añadir punto</button>
-  </div>`;
-}
-
-/*** Reutilizados ***/
 function ParteView({ parte, onPrint, onCSV }){
   const byId=id=>({A:"A",B:"B",C:"C",D:"D",V:"VILLAS"}[id]||id);
-  return html`<main class="container">
+  return html`<main class="container" style="max-width:1100px;margin:0 auto;padding:12px">
     <div style="display:flex;gap:8px;align-items:center;justify-content:space-between">
       <h2 style="font-size:18px;font-weight:600">Parte de trabajo</h2>
       <div>
-        <button class="btn" onClick=${onPrint}>Imprimir</button>
-        <button class="btn-primary" onClick=${onCSV}>Exportar CSV</button>
+        <button onClick=${onPrint}>Imprimir</button>
+        <button onClick=${onCSV}>Exportar CSV</button>
       </div>
     </div>
     ${Object.entries(parte).map(([bid, entries])=>html`
-      <section class="card">
+      <section style="background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:12px;margin-top:12px">
         <h3 style="font-size:16px;font-weight:600">Bloque ${byId(bid)}</h3>
-        ${entries.length===0 ? html`<div class="kv">Sin fallos ni por revisar.</div>` : html`
+        ${entries.length===0 ? html`<div style="font-size:12px;color:#475569">Sin fallos ni por revisar.</div>` : html`
           <div>${entries.sort((a,b)=>a.room-b.room).map(e=>html`
-            <div style="margin:8px 0;padding:8px;border:1px solid var(--b2);border-radius:10px">
+            <div style="margin:8px 0;padding:8px;border:1px solid #e2e8f0;border-radius:10px">
               <div style="font-weight:700">Residencia ${e.room}</div>
               <ul style="margin:6px 0 0 18px">
                 ${e.detalle.map(d=>html`<li>${d.tipo}: ${d.label}</li>`)}
               </ul>
-              ${(e.measures&&e.measures.length)?html`<div class="kv" style="margin-top:6px">Medidas: ${e.measures.map(m=>`[${m.tipo}] ${m.medida}${m.detalle?` — ${m.detalle}`:""}`).join(" | ")}</div>`:null}
-              ${e.notes?html`<div class="kv" style="margin-top:6px">Notas: ${e.notes}</div>`:null}
+              ${(e.measures&&e.measures.length)?html`<div style="font-size:12px;color:#475569;margin-top:6px">Medidas: ${e.measures.map(m=>`[${m.tipo}] ${m.medida}${m.detalle?` — ${m.detalle}`:""}`).join(" | ")}</div>`:null}
+              ${e.notes?html`<div style="font-size:12px;color:#475569;margin-top:6px">Notas: ${e.notes}</div>`:null}
             </div>`)}
           </div>`}
       </section>`)}
@@ -436,12 +470,12 @@ function BlockTile({ b, state, onClick }){
   const rev=overalls.filter(x=>x==="pending").length;
   const ok=overalls.filter(x=>x==="ok").length;
   const none=overalls.filter(x=>x==="none").length;
-  return html`<button class="tile" onClick=${onClick}>
+  return html`<button onClick=${onClick} style="min-height:140px;border:1px solid #cbd5e1;border-radius:16px;padding:16px;background:#fff;width:100%">
     <div style="width:100%">
       <div style="font-size:24px">${b.id==="V"?"🏡":"🏢"}</div>
       <div>${b.label} · ${rooms[0]}–${rooms[rooms.length-1]}</div>
-      <div class="kv" style="margin-top:4px">Fallo: ${fail} · Rev: ${rev} · OK: ${ok} · Sin marcar: ${none}</div>
-      <div class="progress" style="margin-top:8px">
+      <div style="font-size:12px;color:#475569;margin-top:4px">Fallo: ${fail} · Rev: ${rev} · OK: ${ok} · Sin marcar: ${none}</div>
+      <div style="height:8px;border-radius:6px;background:#e5e7eb;border:1px solid #cbd5e1;margin-top:8px;overflow:hidden">
         <div style=${`height:100%;width:${(fail/total)*100}%;background:#ef4444;float:left`}></div>
         <div style=${`height:100%;width:${(rev/total)*100}%;background:#f59e0b;float:left`}></div>
         <div style=${`height:100%;width:${(ok/total)*100}%;background:#10b981;float:left`}></div>
@@ -456,7 +490,7 @@ function RoomChip({ n, overall, onClick }){
   const bg=COLORS_MAP[key]||COLORS_MAP.none;
   const isNone=key==="none"; const color=isNone?"#0f172a":"#ffffff"; const border=isNone?"#cbd5e1":"transparent";
   const realBg=isNone?"#ffffff":bg;
-  return html`<button class="room" onClick=${onClick} style=${`background:${realBg};color:${color};border-color:${border}`}>${n}</button>`;
+  return html`<button onClick=${onClick} style=${`background:${realBg};color:${color};border:1px solid ${border};border-radius:10px;padding:10px 12px;font-weight:700`}>${n}</button>`;
 }
 
 function MeasureForm({ onAdd }){
@@ -471,9 +505,9 @@ function MeasureForm({ onAdd }){
       <option value="enser">Enser</option>
       <option value="otro">Otro</option>
     </select>
-    <input class="small" placeholder="Medida (ej. 60x90 cm)" value=${medida} onInput=${e=>setMedida(e.target.value)} />
-    <input class="small" placeholder="Detalle opcional" value=${detalle} onInput=${e=>setDetalle(e.target.value)} />
-    <button class=${can?"btn-primary":"btn-disabled"} disabled=${!can} onClick=${()=>{ onAdd({tipo,medida,detalle:detalle||undefined}); setMedida(""); setDetalle(""); }}>Añadir</button>
+    <input placeholder="Medida (ej. 60x90 cm)" value=${medida} onInput=${e=>setMedida(e.target.value)} />
+    <input placeholder="Detalle opcional" value=${detalle} onInput=${e=>setDetalle(e.target.value)} />
+    <button disabled=${!can} onClick=${()=>{ onAdd({tipo,medida,detalle:detalle||undefined}); setMedida(""); setDetalle(""); }}>Añadir</button>
   </div>`;
 }
 
@@ -494,20 +528,20 @@ function AuthView({ user, onReady }){
     setCurrent(key); user.setAliasLower(key); onReady && onReady();
   }
   const list=Object.values(users);
-  return html`<main class="container">
-    <div class="auth">
+  return html`<main class="container" style="max-width:1100px;margin:0 auto;padding:12px">
+    <div style="max-width:440px;margin:64px auto;background:#fff;border:1px solid #cbd5e1;border-radius:14px;padding:16px">
       <h2 style="margin:0 0 8px 0">Acceder</h2>
-      <div class="kv">Perfiles locales. Alias + PIN de 4–8 dígitos.</div>
+      <div style="font-size:12px;color:#475569">Perfiles locales. Alias + PIN de 4–8 dígitos.</div>
       <div style="display:grid;gap:8px;margin-top:12px">
         <input placeholder="Alias (ej. Frank)" value=${alias} onInput=${e=>setAlias(e.target.value)} />
         <input placeholder="PIN" type="password" value=${pin} onInput=${e=>setPin(e.target.value)} />
-        <button class="btn-primary" onClick=${enter}>Entrar / Crear perfil</button>
-        ${msg && html`<div class="kv" style="color:#b91c1c">${msg}</div>`}
+        <button onClick=${enter}>Entrar / Crear perfil</button>
+        ${msg && html`<div style="color:#b91c1c">${msg}</div>`}
       </div>
       ${list.length>0 && html`<div style="margin-top:12px">
-        <div class="kv">Perfiles existentes:</div>
+        <div style="font-size:12px;color:#475569">Perfiles existentes:</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-          ${list.map(u => html`<button class="btn" onClick=${()=>setAlias(u.alias)}>${u.alias}</button>`)}
+          ${list.map(u => html`<button onClick=${()=>setAlias(u.alias)}>${u.alias}</button>`)}
         </div>
       </div>`}
     </div>
@@ -524,22 +558,22 @@ function CuentaView({ user, onExport, onImport }){
     delete users[key]; saveUsers(users);
     if(user.aliasLower===key){ logout(); }
   }
-  return html`<main class="container">
-    <div class="card">
+  return html`<main class="container" style="max-width:1100px;margin:0 auto;padding:12px">
+    <div style="background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:12px">
       <h3>Usuario actual: ${user.profile?.alias||"—"}</h3>
-      <div class="kv">Gestiona perfiles, copia de seguridad y migración.</div>
+      <div style="font-size:12px;color:#475569">Gestiona perfiles, copia de seguridad y migración.</div>
       <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn-primary" onClick=${()=>{ location.hash="#/auth"; }}>Cambiar usuario</button>
-        <button class="btn" onClick=${logout}>Cerrar sesión</button>
-        <button class="btn" onClick=${onExport}>Exportar datos (.mhjson)</button>
+        <button onClick=${()=>{ location.hash="#/auth"; }}>Cambiar usuario</button>
+        <button onClick=${logout}>Cerrar sesión</button>
+        <button onClick=${onExport}>Exportar datos (.mhjson)</button>
         <input type="file" accept=".mhjson,application/json" style="display:none" ref=${fileRef} onChange=${e=>{ const f=e.target.files?.[0]; if(f) onImport(f); }} />
-        <button class="btn" onClick=${()=>fileRef.current && fileRef.current.click()}>Importar datos</button>
+        <button onClick=${()=>fileRef.current && fileRef.current.click()}>Importar datos</button>
       </div>
     </div>
-    <div class="card">
+    <div style="background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:12px;margin-top:12px">
       <h3>Perfiles</h3>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${Object.values(loadUsers()).map(u=>html`<span class="pill">${u.alias} <button class="btn" onClick=${()=>delProfile(u.alias)} style="margin-left:8px">Eliminar</button></span>`)}
+        ${Object.values(loadUsers()).map(u=>html`<span style="border:1px solid #e2e8f0;border-radius:999px;padding:6px 10px">${u.alias} <button onClick=${()=>delProfile(u.alias)} style="margin-left:8px">Eliminar</button></span>`)}
       </div>
     </div>
   </main>`;
