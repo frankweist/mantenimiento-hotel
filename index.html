@@ -10,6 +10,22 @@
 </head>
 <body>
   <div id="app"></div>
+
+  <!-- Modal genérico -->
+  <div id="modal" class="hidden modal-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal</h3>
+        <button id="modal-close" class="btn">✕</button>
+      </div>
+      <div id="modal-body"></div>
+      <div class="modal-footer">
+        <button id="modal-cancel" class="btn">Cancelar</button>
+        <button id="modal-ok" class="btn-primary">Guardar</button>
+      </div>
+    </div>
+  </div>
+
   <div id="error-overlay" class="hidden">
     <h3>La app ha fallado</h3>
     <pre id="errlog">(sin detalles)</pre>

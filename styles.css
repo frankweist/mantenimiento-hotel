@@ -11,6 +11,7 @@ body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-appl
 header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 h1{font-size:22px;font-weight:600;margin:0}
 h2{font-size:18px;font-weight:600;margin:0}
+h3{font-size:16px;font-weight:600;margin:0}
 select,input,textarea,button{font:inherit}
 select,input,textarea{padding:8px 10px;border:1px solid var(--b2);border-radius:10px;background:#fff}
 input.small{padding:6px 8px;font-size:13px}
@@ -22,14 +23,20 @@ button{border-radius:10px;border:1px solid transparent;padding:8px 12px;cursor:p
 .btn-disabled{background:#e2e8f0;border:1px solid var(--b2);color:#64748b;cursor:not-allowed}
 .grid{display:grid;gap:12px}
 .plan{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.tile{min-height:140px;border:1px solid var(--b2);border-radius:16px;padding:16px;display:flex;align-items:center;justify-content:center;text-align:center;font-weight:700;background:#fff;color:var(--text)}
+.tile{min-height:140px;border:1px solid var(--b2);border-radius:16px;padding:16px;display:flex;align-items:center;justify-content:center;text-align:center;font-weight:700;background:#fff;color:var(--text);position:relative}
 .rooms{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;margin-top:12px}
-.room{border:1px solid var(--b);border-radius:10px;padding:10px 12px;font-weight:700}
+.room{border:1px solid var(--b);border-radius:10px;padding:10px 12px;font-weight:700;position:relative}
+.room-badge{position:absolute;top:-6px;right:-6px;background:#10b981;color:#fff;border-radius:999px;font-size:10px;padding:3px 6px;border:1px solid #0ea37a}
 .card{background:#fff;border:1px solid var(--b);border-radius:12px;padding:12px;margin-top:12px}
 .kv{font-size:12px;color:var(--muted)}
 .progress{height:8px;border-radius:6px;background:#e5e7eb;overflow:hidden;border:1px solid #cbd5e1}
 .badge{border:1px solid var(--b2);border-radius:999px;padding:6px 10px;background:#fff;cursor:pointer}
 .badge.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+
+.modal-backdrop{position:fixed;inset:0;background:rgba(15,23,42,.4);display:flex;align-items:center;justify-content:center;z-index:10000}
+.modal{background:#fff;border:1px solid var(--b);border-radius:14px;max-width:520px;width:92%;padding:12px}
+.modal-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.modal-footer{display:flex;gap:8px;justify-content:flex-end;margin-top:8px}
 
 #error-overlay{position:fixed;inset:0;background:rgba(255,255,255,.95);color:#111;padding:18px;overflow:auto;z-index:9999}
 #error-overlay pre{white-space:pre-wrap;background:#fee2e2;border:1px solid #ef4444;padding:10px;border-radius:8px}

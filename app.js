@@ -17,7 +17,8 @@
   // ---- Data ----
   var GLOBAL_LS = { users:"mh_users_v1", current:"mh_user_current_v1" };
   var LEGACY = "mh_v1_state";
-  var APP_VERSION = "v1.3.3-local-offline";
+  var APP_VERSION = "v1.4.0-local-trabajos-offline";
+  var SOLVED_WINDOW_MS = 48*60*60*1000; // 48h
 
   var BLOQUES = [
     { id: "A", label: "A", from: 2100, to: 2107 },
@@ -45,6 +46,8 @@
   function nsKey(a){ return "mh_v1_"+a+"_state"; }
   function hashPIN(pin){ var h=5381; for (var i=0;i<pin.length;i++){ h=((h<<5)+h)+pin.charCodeAt(i); h|=0; } return "h"+(h>>>0).toString(16); }
   function nowISO(){ var d=new Date(); function p(n){return String(n).padStart(2,"0");} return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes()); }
+  function toISO(dt){ return new Date(dt).toISOString(); }
+  function fmtHHMM(dt){ var d=new Date(dt); var h=String(d.getHours()).padStart(2,'0'); var m=String(d.getMinutes()).padStart(2,'0'); return h+":"+m; }
 
   function autoOverallFromRoom(room){
     var items = (room&&room.items)||{};
@@ -60,6 +63,14 @@
     return "ok";
   }
 
+  function blockOfRoom(n){
+    for (var i=0;i<BLOQUES.length;i++){
+      var b=BLOQUES[i]; if (n>=b.from && n<=b.to) return b.id;
+    }
+    return null;
+  }
+  function checkById(id){ for (var i=0;i<CHECKS.length;i++){ if(CHECKS[i].id===id) return CHECKS[i]; } return null; }
+
   // ---- State & persistence ----
   function loadUsers(){ try{ return JSON.parse(localStorage.getItem(GLOBAL_LS.users)||"{}"); }catch(e){ return {}; } }
   function saveUsers(u){ try{ localStorage.setItem(GLOBAL_LS.users, JSON.stringify(u)); }catch(e){} }
@@ -74,18 +85,63 @@
     statusFilter: "all",
     users: loadUsers(),
     aliasLower: loadCurrent(),
-    dataByUser: {} // lazy-load por usuario
+    dataByUser: {} // { aliasLower: { ...rooms, _jobs:[] } }
   };
 
   function getUserProfile(){ return appState.aliasLower ? appState.users[appState.aliasLower] : null; }
-  function getUserData(){ var k=appState.aliasLower; if(!k) return {}; if(!appState.dataByUser[k]){ try{ var s=localStorage.getItem(nsKey(k)); appState.dataByUser[k]= s? JSON.parse(s): {}; }catch(e){ appState.dataByUser[k]={}; } } return appState.dataByUser[k]; }
+  function getUserData(){
+    var k=appState.aliasLower; if(!k) return {};
+    if(!appState.dataByUser[k]){
+      try{
+        var s=localStorage.getItem(nsKey(k));
+        appState.dataByUser[k]= s? JSON.parse(s): {};
+      }catch(e){ appState.dataByUser[k]={}; }
+      if (!appState.dataByUser[k]._jobs) appState.dataByUser[k]._jobs=[];
+    }
+    if (!appState.dataByUser[k]._jobs) appState.dataByUser[k]._jobs=[];
+    return appState.dataByUser[k];
+  }
   function setUserData(updater){
     var k=appState.aliasLower; if(!k) return;
     var cur = getUserData();
     var next = updater(cur);
+    if (!next._jobs) next._jobs = cur._jobs||[];
     appState.dataByUser[k]=next;
     try{ localStorage.setItem(nsKey(k), JSON.stringify(next)); }catch(e){}
     render();
+  }
+
+  // Jobs helpers
+  function genId(){ return 'j'+Math.random().toString(36).slice(2)+Date.now().toString(36); }
+  function jobs(){ return (getUserData()._jobs)||[]; }
+  function pushJob(job){
+    setUserData(function(s){
+      var arr = (s._jobs||[]).slice(); arr.push(job);
+      var next = Object.assign({}, s, {_jobs:arr});
+      return next;
+    });
+  }
+  function logJob(opts){
+    var alias=(getUserProfile()&&getUserProfile().alias)||'anon';
+    var j = {
+      id: genId(),
+      ts: new Date().toISOString(),
+      alias: alias,
+      bloque: blockOfRoom(opts.room),
+      room: opts.room,
+      elementoId: opts.elementoId || null,
+      elemento: opts.elemento || (opts.elementoId? (checkById(opts.elementoId)||{label:opts.elementoId}).label : (opts.elementoTexto||"")),
+      accion: opts.accion || "reparación",
+      estadoAntes: opts.estadoAntes || null,
+      estadoDespues: opts.estadoDespues || null,
+      minutos: opts.minutos || null,
+      materiales: opts.materiales || null,
+      notas: opts.notas || null,
+      source: opts.source || "item",
+      anulado: false
+    };
+    pushJob(j);
+    return j;
   }
 
   // ---- Routing ----
@@ -93,12 +149,12 @@
     var h=(location.hash||"").replace(/^#\/?/,"");
     if (!h) return {page:"plan",block:null,room:null};
     var p=h.split("/");
-    if (p[0]==="parte"||p[0]==="cuenta"||p[0]==="auth") return {page:p[0],block:null,room:null};
+    if (p[0]==="parte"||p[0]==="cuenta"||p[0]==="auth"||p[0]==="trabajos") return {page:p[0],block:null,room:null};
     var block=p[0]||null; var room=p[1]?Number(p[1]):null;
     return {page:"plan",block:block,room:room};
   }
   function setRouteTo(pg,room){
-    if (pg==="parte"||pg==="cuenta"||pg==="auth"){ location.hash = "#/"+pg; return; }
+    if (pg==="parte"||pg==="cuenta"||pg==="auth"||pg==="trabajos"){ location.hash = "#/"+pg; return; }
     var block=pg;
     if (!block) location.hash=""; else if (!room) location.hash="#/"+block; else location.hash="#/"+block+"/"+room;
   }
@@ -134,6 +190,27 @@
     return e;
   }
 
+  // ---- Modal ----
+  var modal = document.getElementById('modal');
+  var modalTitle = document.getElementById('modal-title');
+  var modalBody = document.getElementById('modal-body');
+  var modalOk = document.getElementById('modal-ok');
+  var modalCancel = document.getElementById('modal-cancel');
+  var modalClose = document.getElementById('modal-close');
+  function openModal(title, bodyNode, onOk){
+    modalTitle.textContent=title||"";
+    modalBody.innerHTML='';
+    modalBody.appendChild(bodyNode);
+    modal.classList.remove('hidden');
+    function cleanup(){
+      modal.classList.add('hidden');
+      modalOk.onclick=null; modalCancel.onclick=null; modalClose.onclick=null;
+    }
+    modalOk.onclick=function(){ try{ onOk && onOk(); } finally { cleanup(); } };
+    modalCancel.onclick=cleanup;
+    modalClose.onclick=cleanup;
+  }
+
   // ---- Views ----
   function Header(){
     var actions=[];
@@ -145,6 +222,7 @@
       actions.push(el('button',{class:'btn-light',onclick:function(){ setRouteTo(null,null); }},'← Plano'));
     }
     actions.push(el('button',{class:'btn',onclick:function(){ setRouteTo("parte"); }},'Parte'));
+    actions.push(el('button',{class:'btn',onclick:function(){ setRouteTo("trabajos"); }},'Trabajos'));
     actions.push(el('button',{class:'btn-primary',onclick:function(){ setRouteTo("cuenta"); }}, getUserProfile()?("Usuario: "+getUserProfile().alias):"Acceder"));
     return el('header',{class:'container'},
       el('h1',null,'Mantenimiento Hotel · Residences'),
@@ -176,6 +254,17 @@
     );
   }
 
+  function hasRecentSolvedMark(n){
+    var data=getUserData(); var r=data[n]||{};
+    if (r.hideSolvedMark) return false;
+    var overall=(r.overall && r.overall!=="auto")? r.overall : autoOverallFromRoom(r);
+    if (overall!=="ok") return false;
+    var arr=jobs().filter(function(j){ return !j.anulado && j.room===n && j.estadoDespues==='ok'; });
+    if (!arr.length) return false;
+    arr.sort(function(a,b){ return new Date(b.ts)-new Date(a.ts); });
+    var last=arr[0]; return (Date.now()-new Date(last.ts).getTime())<=SOLVED_WINDOW_MS;
+  }
+
   function RoomChip(n){
     var data=getUserData(); var r=data[n]||{}; var overall=(r.overall && r.overall!=="auto")? r.overall : autoOverallFromRoom(r);
     var key=(overall==="pending"?"review":overall);
@@ -183,7 +272,11 @@
     var bg=COLORS_MAP[key]||COLORS_MAP.none;
     var isNone=key==="none"; var color=isNone?"#0f172a":"#ffffff"; var border=isNone?"#cbd5e1":"transparent";
     var realBg=isNone?"#ffffff":bg;
-    return el('button',{class:'room',style:{background:realBg,color:color,borderColor:border},onclick:function(){ setRouteTo(appState.selBlock.id,n); }}, String(n));
+    var btn = el('button',{class:'room',style:{background:realBg,color:color,borderColor:border},onclick:function(){ setRouteTo(appState.selBlock.id,n); }}, String(n));
+    if (hasRecentSolvedMark(n)){
+      btn.appendChild(el('span',{class:'room-badge'},'Solucionado'));
+    }
+    return btn;
   }
 
   function MeasureForm(room){
@@ -207,9 +300,11 @@
     return wrap;
   }
 
+  // ----- Parte de trabajo (accionable) -----
   function ParteView(){
-    var byBlock={};
     var data=getUserData();
+    // construir parte actual
+    var parte={};
     BLOQUES.forEach(function(b){
       var rooms=[]; for(var i=b.from;i<=b.to;i++) rooms.push(i);
       var entries=[];
@@ -218,46 +313,81 @@
         var fails=Object.keys(items).filter(function(k){return items[k]==='fail'});
         var revs=Object.keys(items).filter(function(k){return items[k]==='pending'});
         var detalle=[];
-        fails.forEach(function(k){ var lab=(CHECKS.find(function(c){return c.id===k})||{}).label||k; var note=(itemNotes[k]||"").trim(); detalle.push({tipo:"Fallo",item:k,label:lab+(note?(" — obs: "+note):"")}); });
-        revs.forEach(function(k){ var lab=(CHECKS.find(function(c){return c.id===k})||{}).label||k; var note=(itemNotes[k]||"").trim(); detalle.push({tipo:"Por revisar",item:k,label:lab+(note?(" — obs: "+note):"")}); });
+        fails.forEach(function(k){ var lab=(checkById(k)||{label:k}).label; var note=(itemNotes[k]||"").trim(); detalle.push({tipo:"Fallo",item:k,label:lab, note:note}); });
+        revs.forEach(function(k){ var lab=(checkById(k)||{label:k}).label; var note=(itemNotes[k]||"").trim(); detalle.push({tipo:"Por revisar",item:k,label:lab, note:note}); });
         var roomNote=(r.notes||"").trim();
         var anyItemNoteOnly = Object.keys(itemNotes).some(function(k){ var v=(itemNotes[k]||"").trim(); var st=items[k]; return v.length>0 && (!st||st==='none'||st==='ok'); });
         if (detalle.length===0 && (roomNote || anyItemNoteOnly)){
           if (anyItemNoteOnly){
             Object.keys(itemNotes).forEach(function(k){
-              var note=(itemNotes[k]||"").trim(); if(!note) return; var st=items[k];
-              if (!st||st==='none'||st==='ok'){ var lab=(CHECKS.find(function(c){return c.id===k})||{}).label||k; detalle.push({tipo:'Fallo',item:k,label:lab+' — obs: '+note}); }
+              var v=(itemNotes[k]||"").trim(); if(!v) return; var st=items[k];
+              if (!st||st==='none'||st==='ok'){ var lab=(checkById(k)||{label:k}).label; detalle.push({tipo:'Fallo',item:k,label:lab, note:v}); }
             });
           }
-          if (roomNote){ detalle.push({tipo:'Fallo',item:'observacion_general',label:'Observación general — '+roomNote}); }
+          if (roomNote){ detalle.push({tipo:'Fallo',item:'observacion_general',label:'Observación general', note:roomNote}); }
         }
-        if (detalle.length){ entries.push({room:n,detalle:detalle,measures:(r.measures||[]),notes:roomNote}); }
+        if (detalle.length){ entries.push({room:n,detalle:detalle}); }
       });
-      byBlock[b.id]=entries;
+      parte[b.id]=entries;
     });
 
-    function onCSV(){
-      var rows=[["Usuario","Bloque","Residencia","Tipo","Elemento","Detalle","Medidas","Notas"]];
+    function actHecho(room, itemId, label, prevTipo, prevNote){
+      var data=getUserData(); var r=data[room]||{items:{}}; var prev = (r.items||{})[itemId]||"none";
+      // cambia estado a OK si es un check conocido
+      if (checkById(itemId)) {
+        setUserData(function(s){ var rr=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto"}; rr.items[itemId]='ok'; var next=Object.assign({},s); next[room]=rr; return next; });
+      }
+      // log
+      logJob({source:'parte', room:room, elementoId: checkById(itemId)?itemId:null, elemento: label, accion: (prevTipo==='Por revisar'?'revisión':'reparación'), estadoAntes: prev, estadoDespues: 'ok', notas: prevNote||null});
+    }
+
+    function actDetalles(room, itemId, label, prevTipo, prevNote){
+      var form = (function(){
+        var wrap=el('div',{class:'grid'});
+        var accion=el('select',null, ['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){ return el('option',{value:a},a); }));
+        var minutos=el('input',{placeholder:'Minutos (opcional)',type:'number',min:'0'});
+        var materiales=el('textarea',{placeholder:'Materiales (uno por línea, ej. Bombilla E27 x1)'});
+        var notas=el('textarea',{placeholder:'Notas (opcional)'}); notas.value = prevNote||'';
+        var update=el('select',null, el('option',{value:'ok'},'Actualizar estado a OK'), el('option',{value:'pending'},'Actualizar a Por revisar'), el('option',{value:'none'},'No tocar estado'));
+        wrap.appendChild(el('label',null,'Acción',accion));
+        wrap.appendChild(el('label',null,'Minutos',minutos));
+        wrap.appendChild(el('label',null,'Materiales',materiales));
+        wrap.appendChild(el('label',null,'Notas',notas));
+        wrap.appendChild(el('label',null,'Estado',update));
+        return {node:wrap, get: function(){ return {accion:accion.value, minutos: minutos.value? Number(minutos.value):null, materiales: materiales.value? materiales.value.split('\n').map(function(s){return s.trim();}).filter(Boolean):null, notas: notas.value||null, update:update.value}; }};
+      })();
+      openModal('Registrar trabajo — '+label, form.node, function(){
+        var v=form.get();
+        var data=getUserData(); var r=data[room]||{items:{}}; var prev = (r.items||{})[itemId]||"none";
+        // estado
+        if (checkById(itemId)){
+          if (v.update==='ok' || v.update==='pending'){
+            setUserData(function(s){ var rr=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto"}; rr.items[itemId]=v.update; var next=Object.assign({},s); next[room]=rr; return next; });
+          }
+        }
+        // log
+        logJob({source:'parte', room:room, elementoId: checkById(itemId)?itemId:null, elemento: label, accion: v.accion, estadoAntes: prev, estadoDespues: (v.update==='none'? prev : v.update), minutos: v.minutos, materiales: v.materiales, notas: v.notas});
+      });
+    }
+
+    function onCSV(){ // exporta parte actual
+      var rows=[["Usuario","Bloque","Residencia","Tipo","Elemento","Detalle"]];
       var alias=(getUserProfile()&&getUserProfile().alias)||'anon';
       BLOQUES.forEach(function(b){
-        (byBlock[b.id]||[]).forEach(function(e){
-          var medidas=(e.measures||[]).map(function(m){return "["+m.tipo+"] "+m.medida+(m.detalle?(" — "+m.detalle):"")}).join(" | ");
-          if (e.detalle.length===0){ rows.push([alias,b.id,String(e.room),"","","",medidas,e.notes||""]); }
-          else{
-            e.detalle.forEach(function(d){
-              var parts=d.label.split(" — obs: "); rows.push([alias,b.id,String(e.room),d.tipo,parts[0],parts[1]||"",medidas,e.notes||""]);
-            });
-          }
+        (parte[b.id]||[]).forEach(function(e){
+          e.detalle.forEach(function(d){
+            rows.push([alias,b.id,String(e.room),d.tipo,d.label,d.note||""]);
+          });
         });
       });
       var csv=rows.map(function(r){ return r.map(function(x){ var s=(x==null?"":String(x)); return /[\",\n;]/.test(s)?('"'+s.replace(/\"/g,'""')+'"'):s; }).join(","); }).join("\n");
       var blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
-      var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="parte_"+(((getUserProfile()||{}).alias)||"anon")+"_"+nowISO().replace(/[: ]/g,'-')+".csv";
+      var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="parte_actual_"+(((getUserProfile()||{}).alias)||"anon")+"_"+nowISO().replace(/[: ]/g,'-')+".csv";
       document.body.appendChild(a); a.click(); a.remove();
     }
 
     var main = el('main',{class:'container'},
-      el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justifyContent:'space-between'}},
+      el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justify-content:'space-between'}},
         el('h2',null,'Parte de trabajo'),
         el('div',null,
           el('button',{class:'btn',onclick:function(){ window.print(); }},'Imprimir'),
@@ -266,25 +396,38 @@
       )
     );
 
-    Object.keys(byBlock).forEach(function(bid){
-      var entries=byBlock[bid]; var section = el('section',{class:'card'},
+    Object.keys(parte).forEach(function(bid){
+      var entries=parte[bid];
+      var section = el('section',{class:'card'},
         el('h3',null,'Bloque '+(bid==='V'?'VILLAS':bid)),
         entries.length===0 ? el('div',{class:'kv'},'Sin fallos ni por revisar.') : el('div',null)
       );
       if (entries.length>0){
         entries.sort(function(a,b){return a.room-b.room;}).forEach(function(e){
           var item = el('div',{style:{margin:'8px 0',padding:'8px',border:'1px solid var(--b2)',borderRadius:'10px'}},
-            el('div',{style:{fontWeight:700}}, 'Residencia '+e.room),
-            el('ul',{style:{margin:'6px 0 0 18px'}},
-              e.detalle.map(function(d){ return el('li',null, d.tipo+': '+d.label); })
+            el('div',{style:{fontWeight:700,display:'flex',alignItems:'center',justify-content:'space-between'}},
+              el('span',null,'Residencia '+e.room),
+              el('span',null,
+                el('button',{class:'btn',onclick:function(){
+                  // Resolver todo: pone todos los items de esta entrada a OK y crea jobs
+                  e.detalle.forEach(function(d){ actHecho(e.room, d.item, d.label, d.tipo, d.note); });
+                  render();
+                }},'Resolver todo')
+              )
+            ),
+            el('div',null,
+              e.detalle.map(function(d){
+                var row = el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justify-content:'space-between',padding:'6px 0'}},
+                  el('div',null, d.tipo+': '+d.label+(d.note?(' — '+d.note):'')),
+                  el('div',null,
+                    el('button',{class:'btn',onclick:function(){ actHecho(e.room, d.item, d.label, d.tipo, d.note); render(); }},'Hecho'),
+                    el('button',{class:'btn-primary',style:{marginLeft:'6px'},onclick:function(){ actDetalles(e.room, d.item, d.label, d.tipo, d.note); }},'Hecho + detalles')
+                  )
+                );
+                return row;
+              })
             )
           );
-          if (e.measures && e.measures.length){
-            item.appendChild(el('div',{class:'kv',style:{marginTop:'6px'}}, 'Medidas: '+ e.measures.map(function(m){return '['+m.tipo+'] '+m.medida+(m.detalle?(' — '+m.detalle):'');}).join(' | ')));
-          }
-          if (e.notes){
-            item.appendChild(el('div',{class:'kv',style:{marginTop:'6px'}}, 'Notas: '+e.notes));
-          }
           section.appendChild(item);
         });
       }
@@ -294,12 +437,142 @@
     return main;
   }
 
-  function AddIncidencia(room, remaining){
-    var wrap = el('span',null);
-    var sel = el('select',null, remaining.length? remaining.map(function(c){ return el('option',{value:c.id},c.label); }) : [el('option',{value:''},'(Sin puntos disponibles)')]);
-    var btn = el('button',{class: remaining.length?'btn':'btn-disabled',onclick:function(){ if(!remaining.length) return; var id=sel.value; if(!id) return; setUserData(function(s){ var r=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false}; r.items[r.items[id]?'':id]="pending"; if(!r.items[id]) r.items[id]="pending"; var next=Object.assign({},s); next[room]=r; return next; }); }},'Añadir punto');
-    wrap.appendChild(sel); wrap.appendChild(document.createTextNode(' ')); wrap.appendChild(btn);
-    return wrap;
+  // ----- Trabajos (listado + alta manual) -----
+  function TrabajosView(){
+    var filt = { range:'hoy', block:'all', room:'', accion:'all', elemento:'all', onlySolved:false };
+    function applyFilter(arr){
+      var now=new Date();
+      var start=null;
+      if (filt.range==='hoy'){ start=new Date(); start.setHours(0,0,0,0); }
+      else if (filt.range==='semana'){ start=new Date(now.getTime()-6*24*60*60*1000); start.setHours(0,0,0,0); }
+      return arr.filter(function(j){
+        if (filt.block!=='all' && j.bloque!==filt.block) return false;
+        if (filt.room && String(j.room)!==String(filt.room)) return false;
+        if (filt.accion!=='all' && j.accion!==filt.accion) return false;
+        if (filt.elemento!=='all' && j.elementoId!==filt.elemento) return false;
+        if (filt.onlySolved && j.estadoDespues!=='ok') return false;
+        if (start){ if (new Date(j.ts) < start) return false; }
+        return true;
+      });
+    }
+
+    function exportCSV(arr){
+      var rows=[["ts","alias","bloque","room","elementoId","elemento","accion","estadoAntes","estadoDespues","minutos","materiales","notas","source","anulado"]];
+      arr.forEach(function(j){
+        rows.push([j.ts,j.alias,j.bloque||"",j.room||"",j.elementoId||"",j.elemento||"",j.accion||"",j.estadoAntes||"",j.estadoDespues||"",j.minutos==null?"":j.minutos,(j.materiales||[]).join(" | "),j.notas||"",j.source||"",j.anulado?"1":"0"]);
+      });
+      var csv=rows.map(function(r){ return r.map(function(x){ var s=(x==null?"":String(x)); return /[\",\n;]/.test(s)?('"'+s.replace(/\"/g,'""')+'"'):s; }).join(","); }).join("\n");
+      var blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+      var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="trabajos_"+(((getUserProfile()||{}).alias)||"anon")+"_"+nowISO().replace(/[: ]/g,'-')+".csv";
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+
+    function onNuevoManual(){
+      var form = (function(){
+        var wrap=el('div',{class:'grid'});
+        var hab=el('input',{placeholder:'Habitación (nº)'});
+        var elemSel=el('select',null, CHECKS.map(function(c){return el('option',{value:c.id},c.label)}), el('option',{value:'otro'},'Otro…'));
+        var elemTxt=el('input',{placeholder:'Elemento (si has elegido Otro)'});
+        var accion=el('select',null, ['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){ return el('option',{value:a},a); }));
+        var estado=el('select',null, el('option',{value:'none'},'No tocar estado'), el('option',{value:'ok'},'Marcar OK'), el('option',{value:'pending'},'Marcar Por revisar'));
+        var minutos=el('input',{placeholder:'Minutos (opcional)',type:'number',min:'0'});
+        var materiales=el('textarea',{placeholder:'Materiales (uno por línea)'});
+        var notas=el('textarea',{placeholder:'Notas (opcional)'});
+        wrap.appendChild(el('label',null,'Habitación',hab));
+        wrap.appendChild(el('label',null,'Elemento',elemSel));
+        wrap.appendChild(el('label',null,'Elemento libre',elemTxt));
+        wrap.appendChild(el('label',null,'Acción',accion));
+        wrap.appendChild(el('label',null,'Estado a aplicar',estado));
+        wrap.appendChild(el('label',null,'Minutos',minutos));
+        wrap.appendChild(el('label',null,'Materiales',materiales));
+        wrap.appendChild(el('label',null,'Notas',notas));
+        return {node:wrap, get:function(){ return {
+          room: hab.value? Number(hab.value):null,
+          elementoId: elemSel.value!=='otro'? elemSel.value : null,
+          elementoTexto: elemSel.value==='otro'? (elemTxt.value||"") : null,
+          accion: accion.value,
+          estado: estado.value,
+          minutos: minutos.value? Number(minutos.value):null,
+          materiales: materiales.value? materiales.value.split('\n').map(function(s){return s.trim();}).filter(Boolean):null,
+          notas: notas.value||null
+        };}};
+      })();
+      openModal('Nuevo trabajo manual', form.node, function(){
+        var v=form.get(); if(!v.room || (!v.elementoId && !v.elementoTexto)) return;
+        var prev=null;
+        if (v.elementoId){
+          var data=getUserData(); var r=data[v.room]||{items:{}}; prev=(r.items||{})[v.elementoId]||"none";
+        }
+        // actualizar estado si procede
+        if (v.elementoId && (v.estado==='ok' || v.estado==='pending')){
+          setUserData(function(s){ var rr=s[v.room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto"}; rr.items[v.elementoId]=v.estado; var next=Object.assign({},s); next[v.room]=rr; return next; });
+        }
+        // log
+        logJob({source:'manual', room:v.room, elementoId:v.elementoId||null, elementoTexto:v.elementoTexto||null, accion:v.accion, estadoAntes: prev, estadoDespues: v.elementoId? (v.estado==='none'? prev : v.estado) : null, minutos: v.minutos, materiales: v.materiales, notas: v.notas});
+      });
+    }
+
+    function onReabrir(job){
+      if (!confirm('Reabrir este trabajo y marcar el elemento como "Por revisar"?')) return;
+      setUserData(function(s){
+        var arr=(s._jobs||[]).slice();
+        var idx=arr.findIndex(function(j){return j.id===job.id;});
+        if (idx>=0){ arr[idx]=Object.assign({}, arr[idx], {anulado:true}); }
+        var next=Object.assign({},s,{_jobs:arr});
+        if (job.elementoId && job.room){
+          var rr=next[job.room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto"};
+          rr.items[job.elementoId]='pending'; next[job.room]=rr;
+        }
+        return next;
+      });
+    }
+
+    var top = el('div',{class:'container'},
+      el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justify-content:'space-between'}},
+        el('h2',null,'Trabajos'),
+        el('div',null,
+          el('button',{class:'btn',onclick:function(){ exportCSV(applyFilter(jobs().filter(function(j){return !j.anulado;}))); }},'Exportar CSV'),
+          el('button',{class:'btn-primary',style:{marginLeft:'8px'},onclick:onNuevoManual},'Nuevo trabajo')
+        )
+      ),
+      (function(){
+        var bar=el('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap',margin:'8px 0'}});
+        var range=el('select',null, el('option',{value:'hoy'},'Hoy'), el('option',{value:'semana'},'Semana'), el('option',{value:'todo'},'Todo'));
+        var block=el('select',null, el('option',{value:'all'},'Todos los bloques'), BLOQUES.map(function(b){return el('option',{value:b.id},'Bloque '+(b.id==='V'?'VILLAS':b.id))}));
+        var room=el('input',{class:'small',placeholder:'Hab.'});
+        var accion=el('select',null, el('option',{value:'all'},'Todas las acciones'), ['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){ return el('option',{value:a},a); }));
+        var elemento=el('select',null, el('option',{value:'all'},'Todos los elementos'), CHECKS.map(function(c){return el('option',{value:c.id},c.label)}));
+        var solved=el('label',null, (function(){ var cb=el('input',{type:'checkbox'}); cb.addEventListener('change',function(){ filt.onlySolved=cb.checked; render(); }); return cb; })(), ' Solo solucionados');
+        range.addEventListener('change',function(){ filt.range=range.value; render(); });
+        block.addEventListener('change',function(){ filt.block=block.value; render(); });
+        room.addEventListener('input',function(){ filt.room=room.value; render(); });
+        accion.addEventListener('change',function(){ filt.accion=accion.value; render(); });
+        elemento.addEventListener('change',function(){ filt.elemento=elemento.value; render(); });
+        bar.appendChild(range); bar.appendChild(block); bar.appendChild(room); bar.appendChild(accion); bar.appendChild(elemento); bar.appendChild(solved);
+        return bar;
+      })()
+    );
+
+    var list = el('main',{class:'container'});
+    var arr = applyFilter(jobs().slice().filter(function(j){return !j.anulado;}));
+    arr.sort(function(a,b){ return new Date(b.ts)-new Date(a.ts); });
+    if (!arr.length){
+      list.appendChild(el('div',{class:'kv'},'Sin trabajos en el rango seleccionado.'));
+    } else {
+      arr.forEach(function(j){
+        var line = el('div',{class:'card'},
+          el('div',{style:{display:'flex',alignItems:'center',justify-content:'space-between'}},
+            el('div',null, fmtHHMM(j.ts),' · ', String(j.room||'—'),' · ', (j.elemento||'—'),' · ', j.accion, j.minutos!=null? (' · '+j.minutos+' min'):'', j.notas? (' · '+j.notas):'' ),
+            el('div',null,
+              el('span',{class:'kv'}, (j.estadoAntes||'—')+' → '+(j.estadoDespues||'—')),
+              j.elementoId? el('button',{class:'btn',style:{marginLeft:'8px'},onclick:function(){ onReabrir(j); }},'Reabrir') : null
+            )
+          )
+        );
+        list.appendChild(line);
+      });
+    }
+    return el('div',null, top, list);
   }
 
   function IncidenciasView(room){
@@ -311,7 +584,11 @@
       return CHECKS.filter(function(c){ return !set[c.id]; });
     }
     function setItem(id,val){
+      var prev=(items[id]||"none");
       setUserData(function(s){ var rr=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false}; rr.items[id]=val; var next=Object.assign({},s); next[room]=rr; return next; });
+      if ((prev==='fail' || prev==='pending') && val==='ok'){
+        logJob({source:'item', room:room, elementoId:id, accion:'reparación', estadoAntes: prev, estadoDespues:'ok'});
+      }
     }
     function setNote(id,text){
       setUserData(function(s){ var rr=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false}; rr.itemNotes=rr.itemNotes||{}; rr.itemNotes[id]=text; var next=Object.assign({},s); next[room]=rr; return next; });
@@ -328,32 +605,60 @@
     var vis = visibles();
     if (vis.length===0) grid.appendChild(el('div',{class:'kv'},'Sin incidencias añadidas.'));
     vis.forEach(function(id){
-      var c = CHECKS.find(function(x){return x.id===id}) || {label:id};
+      var c = checkById(id) || {label:id};
       var cur=items[id]||"none"; var note=itemNotes[id]||"";
       var card = el('div',{class:'card',style:{marginTop:0,padding:'10px'}},
-        el('div',{style:{display:'flex',alignItems:'center',gap:'8px',justifyContent:'space-between'}},
-          el('div',{style:{fontSize:'14px'}}, c.label),
-          el('button',{class:'btn',onclick:function(){ quitar(id); }}, 'Quitar')
+        el('div',{style:{display:'flex',alignItems:'center',gap:'8px',justify-content:'space-between'}},
+          el('div',{style:{fontSize:'14px'}}, c.label, (cur==='ok'? ' (Solucionado '+fmtHHMM(new Date())+')':'')),
+          el('div',null,
+            el('button',{class:'btn',onclick:function(){ // resolver rápido
+              setItem(id,'ok');
+            }}, 'Resolver'),
+            el('button',{class:'btn-primary',style:{marginLeft:'6px'},onclick:function(){ // registrar trabajo con detalles
+              var form = (function(){
+                var wrap=el('div',{class:'grid'});
+                var accion=el('select',null, ['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){ return el('option',{value:a},a); }));
+                var minutos=el('input',{placeholder:'Minutos (opcional)',type:'number',min:'0'});
+                var materiales=el('textarea',{placeholder:'Materiales (uno por línea)'});
+                var notas=el('textarea',{placeholder:'Notas (opcional)'}); notas.value = note||'';
+                var update=el('select',null, el('option',{value:'ok'},'Actualizar estado a OK'), el('option',{value:'pending'},'Actualizar a Por revisar'), el('option',{value:'none'},'No tocar estado'));
+                wrap.appendChild(el('label',null,'Acción',accion));
+                wrap.appendChild(el('label',null,'Minutos',minutos));
+                wrap.appendChild(el('label',null,'Materiales',materiales));
+                wrap.appendChild(el('label',null,'Notas',notas));
+                wrap.appendChild(el('label',null,'Estado',update));
+                return {node:wrap, get: function(){ return {accion:accion.value, minutos: minutos.value? Number(minutos.value):null, materiales: materiales.value? materiales.value.split('\n').map(function(s){return s.trim();}).filter(Boolean):null, notas: notas.value||null, update:update.value}; }};
+              })();
+              openModal('Registrar trabajo — '+c.label, form.node, function(){
+                var v=form.get();
+                var prev=(items[id]||"none");
+                if (v.update==='ok' || v.update==='pending') setItem(id, v.update);
+                logJob({source:'item', room:room, elementoId:id, elemento:c.label, accion:v.accion, estadoAntes: prev, estadoDespues: (v.update==='none'? prev : v.update), minutos: v.minutos, materiales: v.materiales, notas: v.notas});
+              });
+            }}, 'Registrar trabajo')
+          )
         ),
         el('div',{style:{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap',marginTop:'8px'}},
-          (function(){
-            var wrap = el('div',null);
-            var b1 = el('button',{class:'btn',onclick:function(){ setItem(id,'fail'); },style:{background: cur==='fail'?'#ef4444':'#fff',color: cur==='fail'?'#fff':'#ef4444',border:'1px solid #ef4444'}}, 'Fallo');
-            var b2 = el('button',{class:'btn',onclick:function(){ setItem(id,'pending'); },style:{background: cur==='pending'?'#f59e0b':'#fff',color: cur==='pending'?'#fff':'#f59e0b',border:'1px solid #f59e0b'}}, 'Por revisar');
-            wrap.appendChild(b1); wrap.appendChild(document.createTextNode(' ')); wrap.appendChild(b2);
-            return wrap;
-          })(),
           (function(){
             var inp = el('input',{class:'small',placeholder:'Observación del elemento',value:note});
             inp.addEventListener('input', function(){ setNote(id, inp.value); });
             return inp;
-          })()
+          })(),
+          el('button',{class:'btn',onclick:function(){ quitar(id); }}, 'Quitar')
         )
       );
       grid.appendChild(card);
     });
     section.appendChild(grid);
     return section;
+  }
+
+  function AddIncidencia(room, remaining){
+    var wrap = el('span',null);
+    var sel = el('select',null, remaining.length? remaining.map(function(c){ return el('option',{value:c.id},c.label); }) : [el('option',{value:''},'(Sin puntos disponibles)')]);
+    var btn = el('button',{class: remaining.length?'btn':'btn-disabled',onclick:function(){ if(!remaining.length) return; var id=sel.value; if(!id) return; setUserData(function(s){ var r=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false}; r.items[r.items[id]?'':id]="pending"; if(!r.items[id]) r.items[id]="pending"; var next=Object.assign({},s); next[room]=r; return next; }); }},'Añadir punto');
+    wrap.appendChild(sel); wrap.appendChild(document.createTextNode(' ')); wrap.appendChild(btn);
+    return wrap;
   }
 
   function CuentaView(){
@@ -391,16 +696,6 @@
           el('button',{class:'btn',onclick:onExport},'Exportar datos (.mhjson)'),
           fileInput,
           el('button',{class:'btn',onclick:function(){ fileInput.click(); }},'Importar datos')
-        )
-      ),
-      el('div',{class:'card'},
-        el('h3',null,'Perfiles'),
-        el('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap'}},
-          Object.values(loadUsers()).map(function(u){
-            return el('span',{class:'badge'}, u.alias, ' ', el('button',{class:'btn',style:{marginLeft:'8px'},onclick:function(){
-              var users=loadUsers(); if(!confirm('Eliminar perfil '+u.alias+'?')) return; delete users[u.alias.toLowerCase()]; saveUsers(users); if((profile&&profile.alias)===u.alias){ setCurrent(null); appState.aliasLower=null; location.hash="#/auth"; } render();
-            }}, 'Eliminar'));
-          })
         )
       )
     );
@@ -455,6 +750,10 @@
       root.appendChild(CuentaView());
       return root;
     }
+    if (appState.page==="trabajos"){
+      root.appendChild(TrabajosView());
+      return root;
+    }
     if (appState.page==="parte"){
       root.appendChild(ParteView());
       return root;
@@ -505,9 +804,6 @@
       var n=appState.selRoom; var data=getUserData(); var r=data[n]||{items:{},itemNotes:{},notes:"",measures:[],overall:"none",assumeOk:false};
       var overall = (r.overall && r.overall!=="auto")? r.overall : autoOverallFromRoom(r);
 
-      function markAllOk(){
-        setUserData(function(s){ var rr=s[n]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false}; CHECKS.forEach(function(c){ rr.items[c.id]='ok'; }); var next=Object.assign({},s); next[n]=rr; return next; });
-      }
       function resetRoom(){
         setUserData(function(s){ var next=Object.assign({},s); next[n]={items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false}; return next; });
       }
@@ -520,12 +816,16 @@
       function setNotes(val){
         setUserData(function(s){ var rr=s[n]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false}; rr.notes=val; var next=Object.assign({},s); next[n]=rr; return next; });
       }
+      function hideSolved(){
+        setUserData(function(s){ var rr=s[n]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false}; rr.hideSolvedMark=true; var next=Object.assign({},s); next[n]=rr; return next; });
+      }
 
       var main = el('main',{class:'container'},
         el('div',{style:{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}},
           el('h2',null, 'Residencia ', String(n)),
           el('span',{class:'badge',style:{marginLeft:'auto',background:overall==="auto"?"#334155":(overall==="ok"?COLORS.ok:overall==="fail"?COLORS.fail:overall==="pending"?COLORS.review:COLORS.none),color:"#fff"}}, labelState(overall)),
           el('button',{class:'btn',onclick:toggleAssumeOk}, r.assumeOk?'Asumir resto OK: Sí':'Asumir resto OK: No'),
+          hasRecentSolvedMark(n)? el('button',{class:'btn',onclick:hideSolved}, 'Ocultar marca'): null,
           el('button',{class:'btn-danger',onclick:resetRoom}, 'Reiniciar habitación')
         ),
         IncidenciasView(n),
