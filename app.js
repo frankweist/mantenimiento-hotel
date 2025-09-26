@@ -17,7 +17,7 @@
   // ---- Data ----
   var GLOBAL_LS = { users:"mh_users_v1", current:"mh_user_current_v1" };
   var LEGACY = "mh_v1_state";
-  var APP_VERSION = "v1.4.0-local-trabajos-offline";
+  var APP_VERSION = "v1.4.1-local-trabajos-offline";
   var SOLVED_WINDOW_MS = 48*60*60*1000; // 48h
 
   var BLOQUES = [
@@ -387,7 +387,7 @@
     }
 
     var main = el('main',{class:'container'},
-      el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justify-content:'space-between'}},
+      el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justifyContent:'spaceBetween'}},
         el('h2',null,'Parte de trabajo'),
         el('div',null,
           el('button',{class:'btn',onclick:function(){ window.print(); }},'Imprimir'),
@@ -405,7 +405,7 @@
       if (entries.length>0){
         entries.sort(function(a,b){return a.room-b.room;}).forEach(function(e){
           var item = el('div',{style:{margin:'8px 0',padding:'8px',border:'1px solid var(--b2)',borderRadius:'10px'}},
-            el('div',{style:{fontWeight:700,display:'flex',alignItems:'center',justify-content:'space-between'}},
+            el('div',{style:{fontWeight:700,display:'flex',alignItems:'center',justifyContent:'spaceBetween'}},
               el('span',null,'Residencia '+e.room),
               el('span',null,
                 el('button',{class:'btn',onclick:function(){
@@ -417,7 +417,7 @@
             ),
             el('div',null,
               e.detalle.map(function(d){
-                var row = el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justify-content:'space-between',padding:'6px 0'}},
+                var row = el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justifyContent:'spaceBetween',padding:'6px 0'}},
                   el('div',null, d.tipo+': '+d.label+(d.note?(' — '+d.note):'')),
                   el('div',null,
                     el('button',{class:'btn',onclick:function(){ actHecho(e.room, d.item, d.label, d.tipo, d.note); render(); }},'Hecho'),
@@ -528,7 +528,7 @@
     }
 
     var top = el('div',{class:'container'},
-      el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justify-content:'space-between'}},
+      el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justifyContent:'spaceBetween'}},
         el('h2',null,'Trabajos'),
         el('div',null,
           el('button',{class:'btn',onclick:function(){ exportCSV(applyFilter(jobs().filter(function(j){return !j.anulado;}))); }},'Exportar CSV'),
@@ -561,7 +561,7 @@
     } else {
       arr.forEach(function(j){
         var line = el('div',{class:'card'},
-          el('div',{style:{display:'flex',alignItems:'center',justify-content:'space-between'}},
+          el('div',{style:{display:'flex',alignItems:'center',justifyContent:'spaceBetween'}},
             el('div',null, fmtHHMM(j.ts),' · ', String(j.room||'—'),' · ', (j.elemento||'—'),' · ', j.accion, j.minutos!=null? (' · '+j.minutos+' min'):'', j.notas? (' · '+j.notas):'' ),
             el('div',null,
               el('span',{class:'kv'}, (j.estadoAntes||'—')+' → '+(j.estadoDespues||'—')),
@@ -608,7 +608,7 @@
       var c = checkById(id) || {label:id};
       var cur=items[id]||"none"; var note=itemNotes[id]||"";
       var card = el('div',{class:'card',style:{marginTop:0,padding:'10px'}},
-        el('div',{style:{display:'flex',alignItems:'center',gap:'8px',justify-content:'space-between'}},
+        el('div',{style:{display:'flex',alignItems:'center',justifyContent:'spaceBetween'}},
           el('div',{style:{fontSize:'14px'}}, c.label, (cur==='ok'? ' (Solucionado '+fmtHHMM(new Date())+')':'')),
           el('div',null,
             el('button',{class:'btn',onclick:function(){ // resolver rápido
