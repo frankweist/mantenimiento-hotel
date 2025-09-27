@@ -1,6 +1,1311 @@
-(function () {
-  var el = document.getElementById('app');
-  if (!el) { document.body.innerHTML = 'Error: #app no encontrado'; return; }
-  el.innerHTML = '<div style="padding:12px;font-family:system-ui">OK: app.js cargado (placeholder)</div>';
-  console.log('placeholder OK');
+(function(){
+  // --- Captura de errores para evitar "pantalla en blanco"
+  var overlay=document.getElementById('error-overlay');
+  var errlog=document.getElementById('errlog');
+  var reloadBtn=document.getElementById('reload-btn');
+  if(reloadBtn) reloadBtn.addEventListener('click',function(){ location.reload() });
+  function showError(e){
+    try{
+      if(overlay) overlay.classList.remove('hidden');
+      if(errlog) errlog.textContent=(e&&(e.stack||e.message||e.toString()))||String(e);
+    }catch(_){}
+  }
+  window.addEventListener('error',function(ev){ showError(ev.error||ev.message) });
+  window.addEventListener('unhandledrejection',function(ev){ showError(ev.reason||ev) });
+
+  // --- Constantes y datos
+  var GLOBAL_LS={users:"mh_users_v1",current:"mh_user_current_v1"};
+  var LEGACY="mh_v1_state";
+  var APP_VERSION="v1.4.2";
+  var SOLVED_WINDOW_MS=2*24*60*60*1000; // 48h
+  var DEFAULT_HORAS_AUTO=0.25;
+  var JORNADA_OBJETIVO=8;
+
+  var BLOQUES=[
+    {id:"A",label:"A",from:2100,to:2107},
+    {id:"B",label:"B",from:2200,to:2207},
+    {id:"C",label:"C",from:2300,to:2307},
+    {id:"D",label:"D",from:2400,to:2401},
+    {id:"V",label:"VILLAS",from:3101,to:3106}
+  ];
+  var CHECKS=[
+    {id:"luces",label:"Luces"},
+    {id:"agua_caliente",label:"Agua caliente"},
+    {id:"hidrokit",label:"Hidrokit"},
+    {id:"aire",label:"Aire acondicionado (funciona, temp adecuada)"},
+    {id:"sensor_inundacion",label:"Sensor de inundación"},
+    {id:"jacuzzi",label:"Jacuzzi"},
+    {id:"tapa_llave",label:"Tapa de acceso a la llave"},
+    {id:"cerradura_electrica",label:"Cerradura eléctrica"},
+    {id:"bis_armarios",label:"Bisagras armarios"},
+    {id:"bis_puertas_ext",label:"Bisagras puertas exteriores"},
+    {id:"humedades",label:"Humedades"},
+    {id:"desperfectos",label:"Desperfectos"}
+  ];
+
+  // --- Utilidades
+  function labelState(s){
+    return s==="ok"?"OK":s==="fail"?"Fallo":s==="pending"?"Por revisar":s==="auto"?"Auto":"—";
+  }
+  function nsKey(a){ return "mh_v1_"+a+"_state" }
+  function hashPIN(pin){ var h=5381; for(var i=0;i<pin.length;i++){ h=((h<<5)+h)+pin.charCodeAt(i); h|=0 } return "h"+(h>>>0).toString(16) }
+  function nowISO(){ var d=new Date(); function p(n){return String(n).padStart(2,"0")} return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+" "+p(d.getHours())+":"+p(d.getMinutes()) }
+  function fmtDate(dt){ var d=new Date(dt); return d.toISOString().slice(0,10) }
+  function fmtHHMM(dt){ var d=new Date(dt); var h=String(d.getHours()).padStart(2,'0'); var m=String(d.getMinutes()).padStart(2,'0'); return h+":"+m }
+  function hoursToMinutes(h){ if(h==null||h==="")return null; var v=Number(h); if(isNaN(v))return null; return Math.round(v*60) }
+  function minutesToHours(m){ if(m==null)return null; return Math.round((m/60)*100)/100 }
+
+  function autoOverallFromRoom(room){
+    var items=(room&&room.items)||{};
+    var vals=Object.keys(items).map(function(k){return items[k]}).filter(function(v){return v!=="none"});
+    var hasFail=vals.indexOf("fail")>=0;
+    var hasPend=vals.indexOf("pending")>=0;
+    var anyItemNote=room&&room.itemNotes&&Object.keys(room.itemNotes).some(function(k){return (room.itemNotes[k]||"").trim().length>0});
+    var anyRoomNote=room&&(room.notes||"").trim().length>0;
+    if(hasFail) return "fail";
+    if(!hasFail && !hasPend && (anyItemNote||anyRoomNote)) return "fail";
+    if(hasPend) return "pending";
+    if(vals.length===0) return room&&room.assumeOk?"ok":"none";
+    return "ok";
+  }
+  function blockOfRoom(n){
+    for(var i=0;i<BLOQUES.length;i++){ var b=BLOQUES[i]; if(n>=b.from&&n<=b.to) return b.id }
+    return null;
+  }
+  function checkById(id){ for(var i=0;i<CHECKS.length;i++){ if(CHECKS[i].id===id) return CHECKS[i] } return null }
+
+  // --- Gestión de usuarios y estado
+  function loadUsers(){ try{ return JSON.parse(localStorage.getItem(GLOBAL_LS.users)||"{}") }catch(e){ return {} } }
+  function saveUsers(u){ try{ localStorage.setItem(GLOBAL_LS.users,JSON.stringify(u)) }catch(e){} }
+  function loadCurrent(){ return localStorage.getItem(GLOBAL_LS.current)||null }
+  function setCurrent(a){ if(a) localStorage.setItem(GLOBAL_LS.current,a); else localStorage.removeItem(GLOBAL_LS.current) }
+
+  var appState={
+    page:"plan",
+    selBlock:null,
+    selRoom:null,
+    filter:"",
+    statusFilter:"all",
+    users:loadUsers(),
+    aliasLower:loadCurrent(),
+    dataByUser:{}
+  };
+
+  function getUserProfile(){ return appState.aliasLower?appState.users[appState.aliasLower]:null }
+  function getUserData(){
+    var k=appState.aliasLower; if(!k) return {};
+    if(!appState.dataByUser[k]){
+      try{
+        var s=localStorage.getItem(nsKey(k));
+        appState.dataByUser[k]=s?JSON.parse(s):{};
+      }catch(e){ appState.dataByUser[k]={} }
+      if(!appState.dataByUser[k]._jobs) appState.dataByUser[k]._jobs=[];
+      if(!appState.dataByUser[k]._timesheets) appState.dataByUser[k]._timesheets=[];
+    }
+    if(!appState.dataByUser[k]._jobs) appState.dataByUser[k]._jobs=[];
+    if(!appState.dataByUser[k]._timesheets) appState.dataByUser[k]._timesheets=[];
+    return appState.dataByUser[k];
+  }
+  function setUserData(updater){
+    var k=appState.aliasLower; if(!k) return;
+    var cur=getUserData();
+    var next=updater(cur);
+    if(!next._jobs) next._jobs=cur._jobs||[];
+    if(!next._timesheets) next._timesheets=cur._timesheets||[];
+    appState.dataByUser[k]=next;
+    try{ localStorage.setItem(nsKey(k),JSON.stringify(next)) }catch(e){}
+    render();
+  }
+
+  // --- Jobs / Trabajos
+  function genId(prefix){ return (prefix||'j')+Math.random().toString(36).slice(2)+Date.now().toString(36) }
+  function jobs(){ return (getUserData()._jobs)||[] }
+  var recentHashes=[];
+  function pushRecentHash(h){ var now=Date.now(); recentHashes=recentHashes.filter(function(e){return now-e.t<10000}); recentHashes.push({h:h,t:now}) }
+  function seenRecently(h){ var now=Date.now(); recentHashes=recentHashes.filter(function(e){return now-e.t<10000}); return recentHashes.some(function(e){return e.h===h}) }
+  function dedupeHash(opts){ return [opts.room||opts.ubicacion||'?',opts.elementoId||opts.elemento||'?',opts.estadoAntes||'?',opts.estadoDespues||'?'].join('|') }
+  function pushJob(job){
+    setUserData(function(s){
+      var arr=(s._jobs||[]).slice();
+      arr.push(job);
+      return Object.assign({},s,{_jobs:arr});
+    });
+  }
+  function logJob(opts){
+    if(opts.checkOkBefore&&typeof opts.checkOkBefore==="function"){
+      try{ if(opts.checkOkBefore()) return null }catch(_){}
+    }
+    var h=dedupeHash(opts);
+    if(seenRecently(h)) return null;
+    pushRecentHash(h);
+    var alias=(getUserProfile()&&getUserProfile().alias)||'anon';
+    var j={
+      id:genId('j'),
+      ts:new Date().toISOString(),
+      alias:alias,
+      bloque:blockOfRoom(opts.room),
+      room:opts.room||null,
+      ubicacion:opts.ubicacion||null,
+      elementoId:opts.elementoId||null,
+      elemento:opts.elemento||(opts.elementoId?(checkById(opts.elementoId)||{label:opts.elementoId}).label:(opts.elementoTexto||"")),
+      accion:opts.accion||"reparación",
+      estadoAntes:opts.estadoAntes||null,
+      estadoDespues:opts.estadoDespues||null,
+      minutos:(opts.horas!=null?hoursToMinutes(opts.horas):(opts.minutos||null)),
+      materiales:opts.materiales||null,
+      notas:opts.notas||null,
+      source:opts.source||"item",
+      anulado:false,
+      editedAt:null
+    };
+    pushJob(j);
+    return j;
+  }
+
+  // --- Timesheets / Jornada
+  function timesheets(){ return (getUserData()._timesheets)||[] }
+  function upsertTimesheet(t){
+    setUserData(function(s){
+      var arr=(s._timesheets||[]).slice();
+      var idx=arr.findIndex(function(x){return x.id===t.id});
+      if(idx>=0) arr[idx]=t; else arr.push(t);
+      return Object.assign({},s,{_timesheets:arr});
+    });
+  }
+  function removeTimesheets(ids){
+    setUserData(function(s){
+      var arr=(s._timesheets||[]).slice().filter(function(x){return ids.indexOf(x.id)<0});
+      return Object.assign({},s,{_timesheets:arr});
+    });
+  }
+
+  // --- Router
+  function parseHash(){
+    var h=(location.hash||"").replace(/^#\/?/,"");
+    if(!h) return {page:"plan",block:null,room:null};
+    var p=h.split("/");
+    if(["parte","cuenta","auth","trabajos","jornada"].indexOf(p[0])>=0) return {page:p[0],block:null,room:null};
+    var block=p[0]||null;
+    var room=p[1]?Number(p[1]):null;
+    return {page:"plan",block:block,room:room};
+  }
+  function setRouteTo(pg,room){
+    if(["parte","cuenta","auth","trabajos","jornada"].indexOf(pg)>=0){ location.hash="#/"+pg; return }
+    var block=pg;
+    if(!block) location.hash="";
+    else if(!room) location.hash="#/"+block;
+    else location.hash="#/"+block+"/"+room;
+  }
+  function applyRoute(){
+    var r=parseHash();
+    appState.page=getUserProfile()?r.page:"auth";
+    if(appState.page==="plan"&&getUserProfile()){
+      if(!r.block){ appState.selBlock=null; appState.selRoom=null }
+      else {
+        var b=BLOQUES.find(function(x){return x.id===r.block});
+        appState.selBlock=b||null;
+        appState.selRoom=r.room||null;
+      }
+    }else{ appState.selBlock=null; appState.selRoom=null }
+    render();
+  }
+  window.addEventListener("hashchange",applyRoute);
+
+  // --- DOM helper
+  function el(tag,attrs){
+    var e=document.createElement(tag);
+    if(attrs){
+      for(var k in attrs){
+        if(k==="class") e.className=attrs[k];
+        else if(k==="style"){ for(var sk in attrs[k]) e.style[sk]=attrs[k][sk] }
+        else if(k.slice(0,2)==="on" && typeof attrs[k]==="function"){ e.addEventListener(k.slice(2).toLowerCase(),attrs[k]) }
+        else if(attrs[k]!==undefined&&attrs[k]!==null){ e.setAttribute(k,attrs[k]) }
+      }
+    }
+    for(var i=2;i<arguments.length;i++){
+      var c=arguments[i]; if(c==null) continue;
+      if(Array.isArray(c)){ c.forEach(function(n){ if(n!=null) e.appendChild(typeof n==="string"?document.createTextNode(n):n) }) }
+      else e.appendChild(typeof c==="string"?document.createTextNode(c):c);
+    }
+    return e;
+  }
+
+  // --- Modal simple
+  var modal=document.getElementById('modal');
+  var modalTitle=document.getElementById('modal-title');
+  var modalBody=document.getElementById('modal-body');
+  var modalOk=document.getElementById('modal-ok');
+  var modalCancel=document.getElementById('modal-cancel');
+  var modalClose=document.getElementById('modal-close');
+  function openModal(title,bodyNode,onOk){
+    modalTitle.textContent=title||"";
+    modalBody.innerHTML='';
+    modalBody.appendChild(bodyNode);
+    modal.classList.remove('hidden');
+    function cleanup(){ modal.classList.add('hidden'); modalOk.onclick=null; modalCancel.onclick=null; modalClose.onclick=null }
+    modalOk.onclick=function(){ try{ onOk&&onOk() } finally{ cleanup() } };
+    modalCancel.onclick=cleanup;
+    modalClose.onclick=cleanup;
+  }
+
+  // --- Header
+  function Header(){
+    var actions=[];
+    if(appState.page==="parte"){
+      actions.push(el('button',{class:'btn-light',onclick:function(){setRouteTo(null,null)}},'← Plano'));
+    }else if(appState.selRoom!=null){
+      actions.push(el('button',{class:'btn-light',onclick:function(){setRouteTo(appState.selBlock.id,null)}},'← Residencias'));
+    }else if(appState.selBlock){
+      actions.push(el('button',{class:'btn-light',onclick:function(){setRouteTo(null,null)}},'← Plano'));
+    }
+    actions.push(el('button',{class:'btn',onclick:function(){setRouteTo("parte")}},'Parte'));
+    actions.push(el('button',{class:'btn',onclick:function(){setRouteTo("trabajos")}},'Trabajos'));
+    actions.push(el('button',{class:'btn',onclick:function(){setRouteTo("jornada")}},'Jornada'));
+    actions.push(el('button',{class:'btn-primary',onclick:function(){setRouteTo("cuenta")}},getUserProfile()?("Usuario: "+getUserProfile().alias):"Acceder"));
+    return el('header',{class:'container'},
+      el('h1',null,'Mantenimiento Hotel · Residences'),
+      el('div',{class:'actions'},actions)
+    );
+  }
+
+  // --- Bloques
+  function BlockTile(b){
+    var rooms=[]; for(var i=b.from;i<=b.to;i++) rooms.push(i);
+    var data=getUserData();
+    var overalls=rooms.map(function(n){
+      var r=data[n];
+      var o=(r&&r.overall&&r.overall!=="auto")?r.overall:(r?autoOverallFromRoom(r):"none");
+      return o;
+    });
+    var total=rooms.length;
+    var fail=overalls.filter(function(x){return x==="fail"}).length;
+    var rev=overalls.filter(function(x){return x==="pending"}).length;
+    var ok=overalls.filter(function(x){return x==="ok"}).length;
+    var none=overalls.filter(function(x){return x==="none"}).length;
+    var progress=el('div',{class:'progress',style:{marginTop:'8px'}},
+      el('div',{style:{height:'100%',width:(fail/total*100)+'%',background:'#ef4444',float:'left'}}),
+      el('div',{style:{height:'100%',width:(rev/total*100)+'%',background:'#f59e0b',float:'left'}}),
+      el('div',{style:{height:'100%',width:(ok/total*100)+'%',background:'#10b981',float:'left'}})
+    );
+    return el('button',{class:'tile',onclick:function(){setRouteTo(b.id,null)}},
+      el('div',{style:{width:'100%'}},
+        el('div',{style:{fontSize:'24px'}},b.id==="V"?"🏡":"🏢"),
+        el('div',null,b.label+" · "+rooms[0]+"–"+rooms[rooms.length-1]),
+        el('div',{class:'kv',style:{marginTop:'4px'}},"Fallo: "+fail+" · Rev: "+rev+" · OK: "+ok+" · Sin marcar: "+none),
+        progress
+      )
+    );
+  }
+
+  // --- Habitación chip
+  function hasRecentSolvedMark(n){
+    var data=getUserData();
+    var r=data[n]||{};
+    if(r.hideSolvedMark) return false;
+    var overall=(r.overall&&r.overall!=="auto")?r.overall:autoOverallFromRoom(r);
+    if(overall!=="ok") return false;
+    var arr=jobs().filter(function(j){return !j.anulado && j.room===n && j.estadoDespues==='ok'});
+    if(!arr.length) return false;
+    arr.sort(function(a,b){return new Date(b.ts)-new Date(a.ts)});
+    var last=arr[0];
+    return (Date.now()-new Date(last.ts).getTime())<=SOLVED_WINDOW_MS;
+  }
+  function RoomChip(n){
+    var data=getUserData();
+    var r=data[n]||{};
+    var overall=(r.overall&&r.overall!=="auto")?r.overall:autoOverallFromRoom(r);
+    var key=(overall==="pending"?"review":overall);
+    var COLORS_MAP={none:"#e5e7eb",review:"#f59e0b",ok:"#10b981",fail:"#ef4444"};
+    var bg=COLORS_MAP[key]||COLORS_MAP.none;
+    var isNone=key==="none";
+    var color=isNone?"#0f172a":"#ffffff";
+    var border=isNone?"#cbd5e1":"transparent";
+    var realBg=isNone?"#ffffff":bg;
+    var btn=el('button',{class:'room',style:{background:realBg,color:color,borderColor:border},onclick:function(){setRouteTo(appState.selBlock.id,n)}},String(n));
+    if(hasRecentSolvedMark(n)){ btn.appendChild(el('span',{class:'room-badge'},'Solucionado')) }
+    return btn;
+  }
+
+  // --- Medidas
+  function MeasureForm(room){
+    var wrap=el('div',{style:{display:'flex',gap:'6px',flexWrap:'wrap'}});
+    var sel=el('select',null,
+      el('option',{value:'madera'},'Madera'),
+      el('option',{value:'ceramica'},'Cerámica'),
+      el('option',{value:'mueble'},'Mueble'),
+      el('option',{value:'enser'},'Enser'),
+      el('option',{value:'otro'},'Otro')
+    );
+    var medida=el('input',{class:'small',placeholder:'Medida (ej. 60x90 cm)'});
+    var detalle=el('input',{class:'small',placeholder:'Detalle opcional'});
+    var btn=el('button',{class:'btn-primary',onclick:function(){
+      if(!medida.value.trim()) return;
+      var m={tipo:sel.value,medida:medida.value.trim()};
+      if(detalle.value.trim()) m.detalle=detalle.value.trim();
+      setUserData(function(s){
+        var r=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto"};
+        var next=Object.assign({},s);
+        r.measures=(r.measures||[]).concat([m]);
+        next[room]=r;
+        return next;
+      });
+      medida.value=""; detalle.value="";
+    }},'Añadir');
+    wrap.appendChild(sel); wrap.appendChild(medida); wrap.appendChild(detalle); wrap.appendChild(btn);
+    return wrap;
+  }
+
+  // --- Lock anti-doble clic
+  var resolveLocks={};
+  function lockKey(room,id){ return String(room)+"|"+String(id||'all') }
+  function isLocked(room,id){ var k=lockKey(room,id); return resolveLocks[k]&&(Date.now()-resolveLocks[k]<1000) }
+  function setLock(room,id){ resolveLocks[lockKey(room,id)]=Date.now() }
+
+  // --- Incidencias (nuevo enfoque)
+  function IncidenciasView(room){
+    var data=getUserData();
+    var r=data[room]||{};
+    var items=r.items||{};
+    var itemNotes=r.itemNotes||{};
+
+    function visibles(){ return Object.keys(items).filter(function(k){ return items[k]==='fail'||items[k]==='pending' }) }
+    function remaining(){
+      var set={}; visibles().forEach(function(k){ set[k]=true });
+      return CHECKS.filter(function(c){ return !set[c.id] });
+    }
+    function setItem(id,val){
+      var prev=(items[id]||"none");
+      setUserData(function(s){
+        var rr=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false};
+        rr.items[id]=val;
+        var next=Object.assign({},s); next[room]=rr; return next;
+      });
+      if((prev==='fail'||prev==='pending')&&val==='ok'){
+        logJob({
+          source:'item',room:room,elementoId:id,accion:'reparación',
+          estadoAntes:prev,estadoDespues:'ok',
+          checkOkBefore:function(){
+            var cur=getUserData()[room];
+            var st=(cur&&cur.items&&cur.items[id])||"none";
+            return st==='ok';
+          }
+        });
+      }
+    }
+    function setNote(id,text){
+      setUserData(function(s){
+        var rr=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false};
+        rr.itemNotes=rr.itemNotes||{}; rr.itemNotes[id]=text;
+        var next=Object.assign({},s); next[room]=rr; return next;
+      });
+    }
+    function quitar(id){
+      setUserData(function(s){
+        var rr=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false};
+        rr.items[id]="none";
+        var next=Object.assign({},s); next[room]=rr; return next;
+      });
+    }
+
+    var section=el('section',{class:'card'}, el('h3',null,'Incidencias ', AddIncidencia(room,remaining())));
+    var grid=el('div',{class:'grid',style:{gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',marginTop:'8px'}});
+    var vis=visibles();
+    if(vis.length===0) grid.appendChild(el('div',{class:'kv'},'Sin incidencias añadidas.'));
+    vis.forEach(function(id){
+      var c=checkById(id)||{label:id};
+      var cur=items[id]||"none";
+      var note=itemNotes[id]||"";
+      var card=el('div',{class:'card',style:{marginTop:0,padding:'10px'}},
+        el('div',{style:{display:'flex',alignItems:'center',justifyContent:'spaceBetween'}},
+          el('div',{style:{fontSize:'14px'}},c.label,(cur==='ok'?' (Solucionado '+fmtHHMM(new Date())+')':'')),
+          el('div',null,
+            el('button',{class:'btn',onclick:function(){ if(isLocked(room,id))return; setLock(room,id); setItem(id,'ok') }},'Resolver'),
+            el('button',{class:'btn-primary',style:{marginLeft:'6px'},onclick:function(){
+              var form=(function(){
+                var wrap=el('div',{class:'grid'});
+                var accion=el('select',null,['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){return el('option',{value:a},a)}));
+                var horas=el('input',{placeholder:'Horas (decimal)',type:'number',min:'0',step:'0.25'});
+                var materiales=el('textarea',{placeholder:'Materiales (uno por línea)'});
+                var notas=el('textarea',{placeholder:'Notas (opcional)'}); notas.value=note||'';
+                var update=el('select',null,
+                  el('option',{value:'ok'},'Actualizar estado a OK'),
+                  el('option',{value:'pending'},'Actualizar a Por revisar'),
+                  el('option',{value:'none'},'No tocar estado')
+                );
+                wrap.appendChild(el('label',null,'Acción',accion));
+                wrap.appendChild(el('label',null,'Horas',horas));
+                wrap.appendChild(el('label',null,'Materiales',materiales));
+                wrap.appendChild(el('label',null,'Notas',notas));
+                wrap.appendChild(el('label',null,'Estado',update));
+                return {
+                  node:wrap,
+                  get:function(){
+                    return {
+                      accion:accion.value,
+                      horas:horas.value?Number(horas.value):null,
+                      materiales:materiales.value?materiales.value.split('\n').map(function(s){return s.trim()}).filter(Boolean):null,
+                      notas:notas.value||null,
+                      update:update.value
+                    }
+                  }
+                }
+              })();
+              openModal('Registrar trabajo — '+c.label,form.node,function(){
+                var v=form.get();
+                var prev=(items[id]||"none");
+                if(v.update==='ok'||v.update==='pending') setItem(id,v.update);
+                logJob({
+                  source:'item',room:room,elementoId:id,elemento:c.label,
+                  accion:v.accion,estadoAntes:prev,estadoDespues:(v.update==='none'?prev:v.update),
+                  horas:v.horas,materiales:v.materiales,notas:v.notas,
+                  checkOkBefore:function(){
+                    var cur=getUserData()[room];
+                    var st=(cur&&cur.items&&cur.items[id])||"none";
+                    return v.update==='ok'&&st==='ok';
+                  }
+                });
+              });
+            }},'Hecho + detalles')
+          )
+        ),
+        el('div',{style:{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap',marginTop:'8px'}},
+          (function(){ var inp=el('input',{class:'small',placeholder:'Observación del elemento',value:note}); inp.addEventListener('input',function(){ setNote(id,inp.value) }); return inp })(),
+          el('button',{class:'btn',onclick:function(){ quitar(id) }},'Quitar')
+        )
+      );
+      grid.appendChild(card);
+    });
+    section.appendChild(grid);
+    return section;
+  }
+
+  function AddIncidencia(room,remaining){
+    var wrap=el('span',null);
+    var sel=el('select',null, remaining.length?remaining.map(function(c){return el('option',{value:c.id},c.label)}):[el('option',{value:''},'(Sin puntos disponibles)')]);
+    var btn=el('button',{class:remaining.length?'btn':'btn-disabled',onclick:function(){
+      if(!remaining.length) return;
+      var id=sel.value; if(!id) return;
+      setUserData(function(s){
+        var r=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false};
+        r.items[r.items[id]?'':id]="pending";
+        if(!r.items[id]) r.items[id]="pending";
+        var next=Object.assign({},s); next[room]=r; return next;
+      });
+    }},'Añadir punto');
+    wrap.appendChild(sel); wrap.appendChild(document.createTextNode(' ')); wrap.appendChild(btn);
+    return wrap;
+  }
+
+  // --- Parte (listado de pendientes y fallos)
+  function ParteView(){
+    var data=getUserData();
+    var parte={};
+    BLOQUES.forEach(function(b){
+      var rooms=[]; for(var i=b.from;i<=b.to;i++) rooms.push(i);
+      var entries=[];
+      rooms.forEach(function(n){
+        var r=data[n]||{};
+        var items=r.items||{};
+        var itemNotes=r.itemNotes||{};
+        var fails=Object.keys(items).filter(function(k){return items[k]==='fail'});
+        var revs=Object.keys(items).filter(function(k){return items[k]==='pending'});
+        var detalle=[];
+        fails.forEach(function(k){ var lab=(checkById(k)||{label:k}).label; var note=(itemNotes[k]||"").trim(); detalle.push({tipo:"Fallo",item:k,label:lab,note:note}) });
+        revs.forEach(function(k){ var lab=(checkById(k)||{label:k}).label; var note=(itemNotes[k]||"").trim(); detalle.push({tipo:"Por revisar",item:k,label:lab,note:note}) });
+
+        var roomNote=(r.notes||"").trim();
+        var anyItemNoteOnly=Object.keys(itemNotes).some(function(k){
+          var v=(itemNotes[k]||"").trim(); var st=items[k];
+          return v.length>0 && (!st||st==='none'||st==='ok');
+        });
+        if(detalle.length===0 && (roomNote||anyItemNoteOnly)){
+          if(anyItemNoteOnly){
+            Object.keys(itemNotes).forEach(function(k){
+              var v=(itemNotes[k]||"").trim(); if(!v) return;
+              var st=items[k];
+              if(!st||st==='none'||st==='ok'){
+                var lab=(checkById(k)||{label:k}).label;
+                detalle.push({tipo:'Fallo',item:k,label:lab,note:v});
+              }
+            });
+          }
+          if(roomNote){ detalle.push({tipo:'Fallo',item:'observacion_general',label:'Observación general',note:roomNote}) }
+        }
+        if(detalle.length){ entries.push({room:n,detalle:detalle}) }
+      });
+      parte[b.id]=entries;
+    });
+
+    function actHecho(room,itemId,label,prevTipo,prevNote){
+      if(isLocked(room,itemId)) return; setLock(room,itemId);
+      var data=getUserData(); var r=data[room]||{items:{}};
+      var prev=(r.items||{})[itemId]||"none";
+      if(checkById(itemId)){
+        setUserData(function(s){
+          var rr=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto"};
+          rr.items[itemId]='ok';
+          var next=Object.assign({},s); next[room]=rr; return next;
+        });
+      }
+      logJob({
+        source:'parte',room:room,elementoId:checkById(itemId)?itemId:null,elemento:label,
+        accion:(prevTipo==='Por revisar'?'revisión':'reparación'),
+        estadoAntes:prev,estadoDespues:'ok',notas:prevNote||null,
+        checkOkBefore:function(){ var cur=getUserData()[room]; var st=(cur&&cur.items&&cur.items[itemId])||"none"; return st==='ok' }
+      });
+    }
+    function actDetalles(room,itemId,label,prevTipo,prevNote){
+      var form=(function(){
+        var wrap=el('div',{class:'grid'});
+        var accion=el('select',null,['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){var o=el('option',{value:a},a);return o}));
+        var horas=el('input',{placeholder:'Horas (decimal, ej. 1.5)',type:'number',min:'0',step:'0.25'});
+        var materiales=el('textarea',{placeholder:'Materiales (uno por línea, ej. Bombilla E27 x1)'});
+        var notas=el('textarea',{placeholder:'Notas (opcional)'}); notas.value=prevNote||'';
+        var update=el('select',null,
+          el('option',{value:'ok'},'Actualizar estado a OK'),
+          el('option',{value:'pending'},'Actualizar a Por revisar'),
+          el('option',{value:'none'},'No tocar estado')
+        );
+        wrap.appendChild(el('label',null,'Acción',accion));
+        wrap.appendChild(el('label',null,'Horas',horas));
+        wrap.appendChild(el('label',null,'Materiales',materiales));
+        wrap.appendChild(el('label',null,'Notas',notas));
+        wrap.appendChild(el('label',null,'Estado',update));
+        return {
+          node:wrap,
+          get:function(){ return {
+            accion:accion.value,
+            horas:horas.value?Number(horas.value):null,
+            materiales:materiales.value?materiales.value.split('\n').map(function(s){return s.trim()}).filter(Boolean):null,
+            notas:notas.value||null,
+            update:update.value
+          } }
+        }
+      })();
+      openModal('Registrar trabajo — '+label,form.node,function(){
+        var v=form.get();
+        var data=getUserData(); var r=data[room]||{items:{}};
+        var prev=(r.items||{})[itemId]||"none";
+        if(checkById(itemId)){
+          if(v.update==='ok'||v.update==='pending'){
+            setUserData(function(s){
+              var rr=s[room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto"};
+              rr.items[itemId]=v.update;
+              var next=Object.assign({},s); next[room]=rr; return next;
+            });
+          }
+        }
+        logJob({
+          source:'parte',room:room,elementoId:checkById(itemId)?itemId:null,elemento:label,
+          accion:v.accion,estadoAntes:prev,estadoDespues:(v.update==='none'?prev:v.update),
+          horas:v.horas,materiales:v.materiales,notas:v.notas,
+          checkOkBefore:function(){ var cur=getUserData()[room]; var st=(cur&&cur.items&&cur.items[itemId])||"none"; return v.update==='ok'&&st==='ok' }
+        });
+      });
+    }
+
+    function onCSV(){
+      var rows=[["Usuario","Bloque","Residencia","Tipo","Elemento","Detalle"]];
+      var alias=(getUserProfile()&&getUserProfile().alias)||'anon';
+      Object.keys(parte).forEach(function(bid){
+        (parte[bid]||[]).forEach(function(e){
+          e.detalle.forEach(function(d){
+            rows.push([alias,bid,String(e.room),d.tipo,d.label,d.note||""])
+          })
+        })
+      });
+      var csv=rows.map(function(r){
+        return r.map(function(x){
+          var s=(x==null?"":String(x));
+          return /[\",\n;]/.test(s)?('\"'+s.replace(/\"/g,'\"\"')+'\"'):s
+        }).join(",")
+      }).join("\n");
+      var blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+      var a=document.createElement("a");
+      a.href=URL.createObjectURL(blob);
+      a.download="parte_actual_"+(((getUserProfile()||{}).alias)||"anon")+"_"+nowISO().replace(/[: ]/g,'-')+".csv";
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+
+    var main=el('main',{class:'container'},
+      el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justifyContent:'spaceBetween'}},
+        el('h2',null,'Parte de trabajo'),
+        el('div',null,
+          el('button',{class:'btn',onclick:function(){window.print()}},'Imprimir'),
+          el('button',{class:'btn-primary',style:{marginLeft:'8px'},onclick:onCSV},'Exportar CSV')
+        )
+      )
+    );
+
+    Object.keys(parte).forEach(function(bid){
+      var entries=parte[bid];
+      var section=el('section',{class:'card'},
+        el('h3',null,'Bloque '+(bid==='V'?'VILLAS':bid)),
+        entries.length===0?el('div',{class:'kv'},'Sin fallos ni por revisar.'):el('div',null)
+      );
+      if(entries.length>0){
+        entries.sort(function(a,b){return a.room-b.room}).forEach(function(e){
+          var item=el('div',{style:{margin:'8px 0',padding:'8px',border:'1px solid var(--b2)',borderRadius:'10px'}},
+            el('div',{style:{fontWeight:700,display:'flex',alignItems:'center',justifyContent:'spaceBetween'}},
+              el('span',null,'Residencia '+e.room),
+              el('span',null,
+                el('button',{class:'btn',onclick:function(){
+                  if(isLocked(e.room,'all')) return;
+                  setLock(e.room,'all');
+                  e.detalle.forEach(function(d){ actHecho(e.room,d.item,d.label,d.tipo,d.note) });
+                  render();
+                }},'Resolver todo')
+              )
+            ),
+            el('div',null,e.detalle.map(function(d){
+              var row=el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justifyContent:'spaceBetween',padding:'6px 0'}},
+                el('div',null,d.tipo+': '+d.label+(d.note?(' — '+d.note):'')),
+                el('div',null,
+                  el('button',{class:'btn',onclick:function(){ actHecho(e.room,d.item,d.label,d.tipo,d.note); render() }},'Hecho'),
+                  el('button',{class:'btn-primary',style:{marginLeft:'6px'},onclick:function(){ actDetalles(e.room,d.item,d.label,d.tipo,d.note) }},'Hecho + detalles')
+                )
+              );
+              return row;
+            }))
+          );
+          section.appendChild(item);
+        }));
+      }
+      main.appendChild(section);
+    });
+
+    return main;
+  }
+
+  // --- Trabajos (log)
+  function TrabajosView(){
+    var filt={range:'hoy',block:'all',room:'',ubicacion:'',accion:'all',elemento:'all',onlySolved:false};
+    var selected={};
+
+    function applyFilter(arr){
+      var now=new Date(); var start=null;
+      if(filt.range==='hoy'){ start=new Date(); start.setHours(0,0,0,0) }
+      else if(filt.range==='semana'){ start=new Date(now.getTime()-6*24*60*60*1000); start.setHours(0,0,0,0) }
+      return arr.filter(function(j){
+        if(j.anulado) return false;
+        if(filt.block!=='all'&&j.bloque!==filt.block) return false;
+        if(filt.room&&String(j.room)!==String(filt.room)) return false;
+        if(filt.ubicacion&&String(j.ubicacion||'').toLowerCase().indexOf(filt.ubicacion.toLowerCase())<0) return false;
+        if(filt.accion!=='all'&&j.accion!==filt.accion) return false;
+        if(filt.elemento!=='all'&&j.elementoId!==filt.elemento) return false;
+        if(filt.onlySolved&&j.estadoDespues!=='ok') return false;
+        if(start && new Date(j.ts)<start) return false;
+        return true;
+      });
+    }
+
+    function exportCSV(arr){
+      var rows=[["ts","alias","bloque","room","ubicacion","elementoId","elemento","accion","estadoAntes","estadoDespues","horas","minutos","materiales","notas","source","anulado"]];
+      arr.forEach(function(j){
+        rows.push([j.ts,j.alias,j.bloque||"",j.room||"",j.ubicacion||"",j.elementoId||"",j.elemento||"",j.accion||"",j.estadoAntes||"",j.estadoDespues||"",minutesToHours(j.minutos)||"",j.minutos==null?"":j.minutos,(j.materiales||[]).join(" | "),j.notas||"",j.source||"",j.anulado?"1":"0"]);
+      });
+      var csv=rows.map(function(r){
+        return r.map(function(x){
+          var s=(x==null?"":String(x));
+          return /[\",\n;]/.test(s)?('\"'+s.replace(/\"/g,'\"\"')+'\"'):s
+        }).join(",")
+      }).join("\n");
+      var blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+      var a=document.createElement("a");
+      a.href=URL.createObjectURL(blob);
+      a.download="trabajos_"+(((getUserProfile()||{}).alias)||"anon")+"_"+nowISO().replace(/[: ]/g,'-')+".csv";
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+
+    function onNuevoManual(){
+      var form=(function(){
+        var wrap=el('div',{class:'grid'});
+        var hab=el('input',{placeholder:'Habitación (nº, opcional)'});
+        var ubic=el('input',{placeholder:'Ubicación/Área (obligatorio si no hay habitación)'});
+        var elemSel=el('select',null, CHECKS.map(function(c){return el('option',{value:c.id},c.label)}), el('option',{value:'otro'},'Otro…') );
+        var elemTxt=el('input',{placeholder:'Elemento (si has elegido Otro)'});
+        var accion=el('select',null,['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){return el('option',{value:a},a)}));
+        var estado=el('select',null, el('option',{value:'none'},'No tocar estado'), el('option',{value:'ok'},'Marcar OK'), el('option',{value:'pending'},'Marcar Por revisar') );
+        var horas=el('input',{placeholder:'Horas (decimal, ej. 0.5)',type:'number',min:'0',step:'0.25'});
+        var materiales=el('textarea',{placeholder:'Materiales (uno por línea)'});
+        var notas=el('textarea',{placeholder:'Notas (opcional)'});
+        wrap.appendChild(el('label',null,'Habitación',hab));
+        wrap.appendChild(el('label',null,'Ubicación',ubic));
+        wrap.appendChild(el('label',null,'Elemento',elemSel));
+        wrap.appendChild(el('label',null,'Elemento libre',elemTxt));
+        wrap.appendChild(el('label',null,'Acción',accion));
+        wrap.appendChild(el('label',null,'Estado a aplicar',estado));
+        wrap.appendChild(el('label',null,'Horas',horas));
+        wrap.appendChild(el('label',null,'Materiales',materiales));
+        wrap.appendChild(el('label',null,'Notas',notas));
+        return { node:wrap, get:function(){
+          return {
+            room:hab.value?Number(hab.value):null,
+            ubicacion:ubic.value?ubic.value.trim():null,
+            elementoId:elemSel.value!=='otro'?elemSel.value:null,
+            elementoTexto:elemSel.value==='otro'?(elemTxt.value||""):null,
+            accion:accion.value,
+            estado:estado.value,
+            horas:horas.value?Number(horas.value):null,
+            materiales:materiales.value?materiales.value.split('\n').map(function(s){return s.trim()}).filter(Boolean):null,
+            notas:notas.value||null
+          }
+        } }
+      })();
+      openModal('Nuevo trabajo manual',form.node,function(){
+        var v=form.get();
+        if((!v.room&&!v.ubicacion)||(!v.elementoId&&!v.elementoTexto)) return;
+        var prev=null;
+        if(v.elementoId&&v.room){
+          var data=getUserData(); var r=data[v.room]||{items:{}};
+          prev=(r.items||{})[v.elementoId]||"none";
+        }
+        if(v.elementoId&&v.room&&(v.estado==='ok'||v.estado==='pending')){
+          setUserData(function(s){
+            var rr=s[v.room]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto"};
+            rr.items[v.elementoId]=v.estado;
+            var next=Object.assign({},s); next[v.room]=rr; return next;
+          });
+        }
+        logJob({
+          source:'manual',room:v.room||null,ubicacion:v.ubicacion||null,
+          elementoId:v.elementoId||null,elementoTexto:v.elementoTexto||null,
+          accion:v.accion,estadoAntes:prev,estadoDespues:v.elementoId&&v.room?(v.estado==='none'?prev:v.estado):null,
+          horas:v.horas,materiales:v.materiales,notas:v.notas
+        });
+      });
+    }
+
+    function onEditar(job){
+      var form=(function(){
+        var wrap=el('div',{class:'grid'});
+        var room=el('input',{placeholder:'Habitación (nº)',value:job.room||''});
+        var ubic=el('input',{placeholder:'Ubicación',value:job.ubicacion||''});
+        var elemTxt=el('input',{placeholder:'Elemento (texto)',value:job.elemento||''});
+        var accion=el('select',null,['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){var o=el('option',{value:a},a); if(a===job.accion) o.selected=true; return o}));
+        var horas=el('input',{placeholder:'Horas',type:'number',min:'0',step:'0.25',value:minutesToHours(job.minutos)||''});
+        var materiales=el('textarea',null); materiales.value=(job.materiales||[]).join("\n");
+        var notas=el('textarea',null); notas.value=job.notas||'';
+        wrap.appendChild(el('label',null,'Habitación',room));
+        wrap.appendChild(el('label',null,'Ubicación',ubic));
+        wrap.appendChild(el('label',null,'Elemento',elemTxt));
+        wrap.appendChild(el('label',null,'Acción',accion));
+        wrap.appendChild(el('label',null,'Horas',horas));
+        wrap.appendChild(el('label',null,'Materiales',materiales));
+        wrap.appendChild(el('label',null,'Notas',notas));
+        return { node:wrap, get:function(){ return {
+          room:room.value?Number(room.value):null,
+          ubicacion:ubic.value?ubic.value.trim():null,
+          elemento:elemTxt.value||'',
+          accion:accion.value,
+          horas:horas.value?Number(horas.value):null,
+          materiales:materiales.value?materiales.value.split('\n').map(function(s){return s.trim()}).filter(Boolean):null,
+          notas:notas.value||null
+        }} }
+      })();
+      openModal('Editar trabajo',form.node,function(){
+        var v=form.get();
+        setUserData(function(s){
+          var arr=(s._jobs||[]).slice();
+          var idx=arr.findIndex(function(j){return j.id===job.id});
+          if(idx>=0){
+            var j=Object.assign({},arr[idx],v,{minutos:hoursToMinutes(v.horas),editedAt:new Date().toISOString()});
+            j.elemento=v.elemento||arr[idx].elemento;
+            arr[idx]=j;
+          }
+          return Object.assign({},s,{_jobs:arr});
+        });
+      });
+    }
+    function onAnular(job){
+      if(!confirm('¿Anular este trabajo? Se ocultará de listados y exportación.')) return;
+      setUserData(function(s){
+        var arr=(s._jobs||[]).slice();
+        var idx=arr.findIndex(function(j){return j.id===job.id});
+        if(idx>=0){ arr[idx]=Object.assign({},arr[idx],{anulado:true,editedAt:new Date().toISOString()}) }
+        return Object.assign({},s,{_jobs:arr});
+      });
+    }
+    function onEliminar(job){
+      if(!confirm('Eliminar definitivamente este trabajo?')) return;
+      setUserData(function(s){
+        var arr=(s._jobs||[]).slice().filter(function(j){return j.id!==job.id});
+        return Object.assign({},s,{_jobs:arr});
+      });
+    }
+    function onEliminarSeleccionados(){
+      var ids=Object.keys(selected).filter(function(id){return selected[id]});
+      if(!ids.length) return;
+      if(!confirm('Eliminar definitivamente '+ids.length+' trabajos?')) return;
+      setUserData(function(s){
+        var arr=(s._jobs||[]).slice().filter(function(j){return ids.indexOf(j.id)<0});
+        return Object.assign({},s,{_jobs:arr});
+      });
+    }
+
+    var top=el('div',{class:'container'},
+      el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justifyContent:'spaceBetween'}},
+        el('h2',null,'Trabajos'),
+        el('div',null,
+          el('button',{class:'btn',onclick:function(){ exportCSV(applyFilter(jobs().slice())) }},'Exportar CSV'),
+          el('button',{class:'btn',style:{marginLeft:'8px'},onclick:onEliminarSeleccionados},'Eliminar seleccionados'),
+          el('button',{class:'btn-primary',style:{marginLeft:'8px'},onclick:onNuevoManual},'Nuevo trabajo')
+        )
+      )
+    );
+
+    var bar=(function(){
+      var bar=el('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap',margin:'8px 0'}});
+      var range=el('select',null, el('option',{value:'hoy'},'Hoy'), el('option',{value:'semana'},'Semana'), el('option',{value:'todo'},'Todo') );
+      var block=el('select',null, el('option',{value:'all'},'Todos los bloques'), BLOQUES.map(function(b){return el('option',{value:b.id},'Bloque '+(b.id==='V'?'VILLAS':b.id))}) );
+      var room=el('input',{class:'small',placeholder:'Hab.'});
+      var ubicacion=el('input',{class:'small',placeholder:'Ubicación'});
+      var accion=el('select',null, el('option',{value:'all'},'Todas las acciones'), ['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){return el('option',{value:a},a)}) );
+      var elemento=el('select',null, el('option',{value:'all'},'Todos los elementos'), CHECKS.map(function(c){return el('option',{value:c.id},c.label)}) );
+      var solved=el('label',null,(function(){ var cb=el('input',{type:'checkbox'}); cb.addEventListener('change',function(){filt.onlySolved=cb.checked; render()}); return cb })(),' Solo solucionados');
+      range.addEventListener('change',function(){filt.range=range.value;render()});
+      block.addEventListener('change',function(){filt.block=block.value;render()});
+      room.addEventListener('input',function(){filt.room=room.value;render()});
+      ubicacion.addEventListener('input',function(){filt.ubicacion=ubicacion.value;render()});
+      accion.addEventListener('change',function(){filt.accion=accion.value;render()});
+      elemento.addEventListener('change',function(){filt.elemento=elemento.value;render()});
+      bar.appendChild(range); bar.appendChild(block); bar.appendChild(room); bar.appendChild(ubicacion); bar.appendChild(accion); bar.appendChild(elemento); bar.appendChild(solved);
+      return bar;
+    })();
+
+    var list=el('main',{class:'container'});
+    var arr=applyFilter(jobs().slice());
+    arr.sort(function(a,b){return new Date(b.ts)-new Date(a.ts)});
+
+    if(!arr.length){
+      list.appendChild(el('div',{class:'kv'},'Sin trabajos en el rango seleccionado.'));
+    }else{
+      arr.forEach(function(j){
+        var line=el('div',{class:'card'},
+          el('div',{style:{display:'flex',alignItems:'center',justifyContent:'spaceBetween'}},
+            el('div',null,
+              el('input',{type:'checkbox',onchange:function(ev){selected[j.id]=ev.target.checked}}),' ',
+              fmtHHMM(j.ts),' · ',(j.room?String(j.room):(j.ubicacion||'—')),' · ',(j.elemento||'—'),' · ',j.accion,
+              (j.minutos!=null?(' · '+minutesToHours(j.minutos)+' h'):''), j.notas?(' · '+j.notas):''
+            ),
+            el('div',null,
+              el('span',{class:'kv'},(j.estadoAntes||'—')+' → '+(j.estadoDespues||'—')),
+              el('button',{class:'btn',style:{marginLeft:'8px'},onclick:function(){onEditar(j)}},'Editar'),
+              el('button',{class:'btn',style:{marginLeft:'6px'},onclick:function(){onAnular(j)}},'Anular'),
+              el('button',{class:'btn-danger',style:{marginLeft:'6px'},onclick:function(){onEliminar(j)}},'Eliminar')
+            )
+          )
+        );
+        list.appendChild(line);
+      });
+    }
+    return el('div',null,top,bar,list);
+  }
+
+  // --- Jornada
+  function JornadaView(){
+    var range='hoy';
+    function keyFromJob(j){
+      var d=fmtDate(j.ts);
+      var loc=j.room?('H'+j.room):(j.ubicacion?('U:'+j.ubicacion):'—');
+      var el=j.elementoId||j.elemento||'—';
+      return [d,loc,el,j.accion].join('|');
+    }
+    function addRow(t){ upsertTimesheet(t) }
+    function onAuto(){
+      var pool=jobs().filter(function(j){return !j.anulado});
+      if(range==='hoy'){ var start=new Date(); start.setHours(0,0,0,0); pool=pool.filter(function(j){return new Date(j.ts)>=start}) }
+      else if(range==='semana'){ var start2=new Date(Date.now()-6*24*60*60*1000); start2.setHours(0,0,0,0); pool=pool.filter(function(j){return new Date(j.ts)>=start2}) }
+      var map={};
+      pool.forEach(function(j){
+        var key=keyFromJob(j);
+        var horas=(j.minutos!=null?minutesToHours(j.minutos):DEFAULT_HORAS_AUTO);
+        if(!map[key]){
+          map[key]={ id:genId('t'), ts:j.ts, alias:j.alias, bloque:j.bloque||null, room:j.room||null, ubicacion:j.ubicacion||null,
+            accion:j.accion, elementoId:j.elementoId||null, elemento:j.elemento||null, horas:0, materiales:j.materiales||null,
+            notas:j.notas||'', origen:'auto', refJobId:j.id, closed:false, editedAt:null };
+        }
+        map[key].horas=Math.round((map[key].horas+horas)*100)/100;
+      });
+      var list=Object.values(map);
+      setUserData(function(s){
+        var arr=(s._timesheets||[]).slice();
+        list.forEach(function(t){
+          var idx=arr.findIndex(function(x){
+            var k1=[fmtDate(x.ts), x.room?('H'+x.room):(x.ubicacion?('U:'+x.ubicacion):'—'), x.elementoId||x.elemento||'—', x.accion].join('|');
+            var k2=[fmtDate(t.ts), t.room?('H'+t.room):(t.ubicacion?('U:'+t.ubicacion):'—'), t.elementoId||t.elemento||'—', t.accion].join('|');
+            return k1===k2;
+          });
+          if(idx>=0){ arr[idx]=Object.assign({},arr[idx],{horas:Math.round((arr[idx].horas+t.horas)*100)/100,editedAt:new Date().toISOString()}) }
+          else { arr.push(t) }
+        });
+        return Object.assign({},s,{_timesheets:arr});
+      });
+    }
+    function exportCSV(){
+      var arr=timesheets().slice();
+      if(range==='hoy'){ var start=new Date(); start.setHours(0,0,0,0); arr=arr.filter(function(t){return new Date(t.ts)>=start}) }
+      else if(range==='semana'){ var start2=new Date(Date.now()-6*24*60*60*1000); start2.setHours(0,0,0,0); arr=arr.filter(function(t){return new Date(t.ts)>=start2}) }
+      var rows=[["fecha","usuario","bloque","room","ubicacion","accion","elementoId","elemento","horas","materiales","notas","origen","refJobId"]];
+      arr.sort(function(a,b){return new Date(a.ts)-new Date(b.ts)}).forEach(function(t){
+        rows.push([fmtDate(t.ts),(t.alias||((getUserProfile()||{}).alias)||'anon'),t.bloque||"",t.room||"",t.ubicacion||"",t.accion||"",t.elementoId||"",t.elemento||"",t.horas||"", (t.materiales||[]).join(" | "), t.notas||"", t.origen||"", t.refJobId||""]);
+      });
+      var csv=rows.map(function(r){
+        return r.map(function(x){
+          var s=(x==null?"":String(x));
+          return /[\",\n;]/.test(s)?('\"'+s.replace(/\"/g,'\"\"')+'\"'):s
+        }).join(",")
+      }).join("\n");
+      var blob=new Blob([csv],{type:"text/csv;charset=utf-8"});
+      var a=document.createElement("a");
+      a.href=URL.createObjectURL(blob);
+      a.download="jornada_"+(((getUserProfile()||{}).alias)||"anon")+"_"+nowISO().replace(/[: ]/g,'-')+".csv";
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    function onAddManual(){
+      var form=(function(){
+        var wrap=el('div',{class:'grid'});
+        var fecha=el('input',{type:'date',value:fmtDate(new Date())});
+        var room=el('input',{placeholder:'Habitación (opcional)'});
+        var ubic=el('input',{placeholder:'Ubicación/Área (si no hay habitación)'});
+        var elemSel=el('select',null, CHECKS.map(function(c){return el('option',{value:c.id},c.label)}), el('option',{value:'otro'},'Otro…') );
+        var elemTxt=el('input',{placeholder:'Elemento (si Otro)'});
+        var accion=el('select',null,['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){return el('option',{value:a},a)}));
+        var horas=el('input',{placeholder:'Horas',type:'number',min:'0',step:'0.25'});
+        var notas=el('textarea',{placeholder:'Notas'});
+        wrap.appendChild(el('label',null,'Fecha',fecha));
+        wrap.appendChild(el('label',null,'Habitación',room));
+        wrap.appendChild(el('label',null,'Ubicación',ubic));
+        wrap.appendChild(el('label',null,'Elemento',elemSel));
+        wrap.appendChild(el('label',null,'Elemento libre',elemTxt));
+        wrap.appendChild(el('label',null,'Acción',accion));
+        wrap.appendChild(el('label',null,'Horas',horas));
+        wrap.appendChild(el('label',null,'Notas',notas));
+        return { node:wrap, get:function(){ return {
+          ts:new Date(fecha.value+"T08:00:00").toISOString(),
+          room:room.value?Number(room.value):null,
+          ubicacion:ubic.value?ubic.value.trim():null,
+          elementoId:elemSel.value!=='otro'?elemSel.value:null,
+          elemento:elemSel.value==='otro'?(elemTxt.value||""):(CHECKS.find(function(c){return c.id===elemSel.value})||{label:elemSel.value}).label,
+          accion:accion.value, horas:horas.value?Number(horas.value):0, notas:notas.value||""
+        }} }
+      })();
+      openModal('Añadir fila de jornada',form.node,function(){
+        var v=form.get();
+        if((!v.room&&!v.ubicacion)) return;
+        var t={ id:genId('t'), ts:v.ts, alias:(getUserProfile()||{}).alias||'anon', bloque:v.room?blockOfRoom(v.room):null,
+          room:v.room||null, ubicacion:v.ubicacion||null, accion:v.accion, elementoId:v.elementoId||null, elemento:v.elemento||null,
+          horas:v.horas, materiales:null, notas:v.notas, origen:'manual', refJobId:null, closed:false, editedAt:null };
+        addRow(t);
+      });
+    }
+    function onDeleteRow(t){
+      if(!confirm('¿Eliminar esta fila de jornada?')) return;
+      removeTimesheets([t.id]);
+    }
+    function onExport(){ exportCSV() }
+
+    var cont=el('div',{class:'container'});
+    var bar=el('div',{style:{display:'flex',gap:'8px',alignItems:'center',justifyContent:'spaceBetween'}},
+      el('h2',null,'Jornada'),
+      el('div',null,
+        el('button',{class:'btn',onclick:function(){onExport()}},'Exportar CSV'),
+        el('button',{class:'btn',style:{marginLeft:'8px'},onclick:function(){onAuto()}},'Auto-rellenar desde Trabajos'),
+        el('button',{class:'btn-primary',style:{marginLeft:'8px'},onclick:function(){onAddManual()}},'Añadir fila')
+      )
+    );
+    cont.appendChild(bar);
+
+    var rangeBar=(function(){
+      var w=el('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap',margin:'8px 0'}});
+      var sel=el('select',null, el('option',{value:'hoy'},'Hoy'), el('option',{value:'semana'},'Semana'), el('option',{value:'todo'},'Todo') );
+      sel.addEventListener('change',function(){ range=sel.value; render() });
+      w.appendChild(sel); return w;
+    })();
+    cont.appendChild(rangeBar);
+
+    var arr=timesheets().slice();
+    if(range==='hoy'){ var start=new Date(); start.setHours(0,0,0,0); arr=arr.filter(function(t){return new Date(t.ts)>=start}) }
+    else if(range==='semana'){ var start2=new Date(Date.now()-6*24*60*60*1000); start2.setHours(0,0,0,0); arr=arr.filter(function(t){return new Date(t.ts)>=start2}) }
+    arr.sort(function(a,b){return new Date(a.ts)-new Date(b.ts)});
+
+    var totalHoras=arr.reduce(function(sum,t){return sum+(t.horas||0)},0);
+    cont.appendChild(el('div',{class:'kv'},'Total horas en rango: '+(Math.round(totalHoras*100)/100)+' h · Objetivo diario: '+JORNADA_OBJETIVO+' h'));
+
+    var table=el('table',{class:'table'});
+    table.appendChild(el('thead',null,el('tr',null,
+      el('th',null,'Fecha'), el('th',null,'Bloque'), el('th',null,'Hab/Ubicación'), el('th',null,'Acción'),
+      el('th',null,'Elemento'), el('th',null,'Horas'), el('th',null,'Notas'), el('th',null,'Origen'), el('th',null,'Ref'), el('th',null,'')
+    )));
+    var tbody=el('tbody',null);
+    arr.forEach(function(t){
+      function saveInline(field,value){
+        var nt=Object.assign({},t); nt[field]=value; nt.editedAt=new Date().toISOString(); upsertTimesheet(nt);
+      }
+      var row=el('tr',null,
+        (function(){ var td=el('td',null); var i=el('input',{type:'date',value:fmtDate(t.ts)}); i.addEventListener('change',function(){ var d=new Date(i.value+"T08:00:00"); saveInline('ts',d.toISOString()) }); td.appendChild(i); return td })(),
+        el('td',null,t.bloque||'—'),
+        (function(){ var td=el('td',null); var i=el('input',{value:t.room?('H '+t.room):(t.ubicacion||'')}); i.addEventListener('change',function(){ var v=i.value.trim(); var nt=Object.assign({},t); if(/^H\s*\d+$/i.test(v)){ nt.room=Number(v.replace(/[^0-9]/g,'')); nt.ubicacion=null; nt.bloque=blockOfRoom(nt.room) } else { nt.room=null; nt.ubicacion=v||null; nt.bloque=null } nt.editedAt=new Date().toISOString(); upsertTimesheet(nt) }); td.appendChild(i); return td })(),
+        (function(){ var td=el('td',null); var s=el('select',null,['reparación','revisión','sustitución','medición','limpieza','otro'].map(function(a){ var o=el('option',{value:a},a); if(a===t.accion) o.selected=true; return o })); s.addEventListener('change',function(){ saveInline('accion',s.value) }); td.appendChild(s); return td })(),
+        (function(){ var td=el('td',null); var i=el('input',{value:t.elemento||''}); i.addEventListener('change',function(){ saveInline('elemento',i.value) }); td.appendChild(i); return td })(),
+        (function(){ var td=el('td',null); var i=el('input',{type:'number',step:'0.25',min:'0',value:t.horas||0}); i.addEventListener('change',function(){ var v=Number(i.value); if(isNaN(v)||v<0)v=0; saveInline('horas',Math.round(v*100)/100) }); td.appendChild(i); return td })(),
+        (function(){ var td=el('td',null); var i=el('input',{value:t.notas||''}); i.addEventListener('change',function(){ saveInline('notas',i.value) }); td.appendChild(i); return td })(),
+        el('td',null,t.origen||'—'),
+        el('td',null,t.refJobId||'—'),
+        (function(){ var td=el('td',null); td.appendChild(el('button',{class:'btn-danger',onclick:function(){ onDeleteRow(t) }},'Eliminar')); return td })()
+      );
+      tbody.appendChild(row);
+    });
+    table.appendChild(tbody);
+    cont.appendChild(table);
+    return cont;
+  }
+
+  // --- Cuenta (import/export y perfiles)
+  function CuentaView(){
+    var profile=getUserProfile();
+    function logout(){ setCurrent(null); appState.aliasLower=null; appState.page='auth'; render() }
+    function onExport(){
+      var alias=(profile&&profile.alias)||'anon';
+      var data=localStorage.getItem(nsKey(appState.aliasLower))||"{}";
+      var payload={type:"mh-profile",version:APP_VERSION,alias:alias,storedAt:new Date().toISOString(),data:JSON.parse(data)};
+      var blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+      var a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download="mh-"+alias+"-"+nowISO().replace(/[: ]/g,'-')+".mhjson";
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    function onImport(file){
+      var fr=new FileReader();
+      fr.onload=function(){
+        try{
+          var payload=JSON.parse(fr.result);
+          if(!payload||!payload.data){ alert("Archivo inválido"); return }
+          localStorage.setItem(nsKey(appState.aliasLower),JSON.stringify(payload.data));
+          location.reload();
+        }catch(e){ alert("No se pudo importar") }
+      };
+      fr.readAsText(file);
+    }
+    var fileInput=el('input',{type:'file',accept:'.mhjson,application/json',style:{display:'none'}});
+    fileInput.addEventListener('change',function(e){
+      var f=e.target.files&&e.target.files[0];
+      if(f) onImport(f);
+    });
+    return el('main',{class:'container'},
+      el('div',{class:'card'},
+        el('h3',null,'Usuario actual: ',profile?profile.alias:"—"),
+        el('div',{class:'kv'},'Perfiles locales, copia de seguridad y migración.'),
+        el('div',{style:{marginTop:'10px',display:'flex',gap:'8px',flexWrap:'wrap'}},
+          el('button',{class:'btn',onclick:function(){location.hash="#/auth"}},'Cambiar usuario'),
+          el('button',{class:'btn',onclick:logout},'Cerrar sesión'),
+          el('button',{class:'btn',onclick:onExport},'Exportar datos (.mhjson)'),
+          fileInput,
+          el('button',{class:'btn',onclick:function(){fileInput.click()}},'Importar datos')
+        )
+      )
+    );
+  }
+
+  // --- Auth
+  function AuthView(){
+    var users=loadUsers();
+    var alias=""; var pin="";
+    var main=el('main',{class:'container'},
+      el('div',{class:'card',style:{maxWidth:'440px',margin:'64px auto'}},
+        el('h2',null,'Acceder'),
+        el('div',{class:'kv'},'Perfiles locales. Alias + PIN de 4–8 dígitos.'),
+        (function(){
+          var box=el('div',{style:{display:'grid',gap:'8px',marginTop:'12px'}});
+          var a=el('input',{placeholder:'Alias (ej. Frank)'}); var p=el('input',{placeholder:'PIN',type:'password'}); var m=el('div',{style:{color:'#b91c1c'}}); var btn=el('button',{class:'btn-primary'},'Entrar / Crear perfil');
+          a.addEventListener('input',function(){alias=a.value}); p.addEventListener('input',function(){pin=p.value});
+          btn.addEventListener('click',function(){
+            var al=alias.trim(); var pi=pin.trim();
+            if(!al||!pi){ m.textContent="Alias y PIN requeridos"; return }
+            var key=al.toLowerCase();
+            var u=users[key]; var h=hashPIN(pi);
+            if(!u){
+              users[key]={alias:al,pinHash:h,createdAt:new Date().toISOString()}; saveUsers(users);
+              try{
+                var legacy=localStorage.getItem(LEGACY);
+                if(legacy&&!localStorage.getItem(nsKey(key))){ localStorage.setItem(nsKey(key),legacy); localStorage.removeItem(LEGACY) }
+              }catch(e){}
+              setCurrent(key); appState.aliasLower=key; location.hash=""; return;
+            }
+            if(u.pinHash!==h){ m.textContent="PIN incorrecto"; return }
+            setCurrent(key); appState.aliasLower=key; location.hash="";
+          });
+          box.appendChild(a); box.appendChild(p); box.appendChild(btn); box.appendChild(m); return box;
+        })(),
+        Object.values(users).length>0
+          ? el('div',{style:{marginTop:'12px'}},
+              el('div',{class:'kv'},'Perfiles existentes:'),
+              el('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap',marginTop:'6px'}},
+                Object.values(users).map(function(u){
+                  var b=el('button',{class:'btn'},u.alias);
+                  b.addEventListener('click',function(){ alias=u.alias; document.activeElement.blur() });
+                  return b;
+                })
+              )
+            )
+          : null
+      )
+    );
+    return main;
+  }
+
+  // --- Main View
+  function MainView(){
+    var root=el('div',null, Header() );
+    if(appState.page==="cuenta"){ root.appendChild(CuentaView()); return root }
+    if(appState.page==="trabajos"){ root.appendChild(TrabajosView()); return root }
+    if(appState.page==="parte"){ root.appendChild(ParteView()); return root }
+    if(appState.page==="jornada"){ root.appendChild(JornadaView()); return root }
+
+    if(!appState.selBlock){
+      var plan=el('main',{class:'container'},
+        el('div',{class:'plan'}, BLOQUES.map(function(b){ return BlockTile(b) })),
+        el('p',{class:'kv',style:{marginTop:'10px'}},'Usuario: ',(getUserProfile()?getUserProfile().alias:"—"),'. Pulsa un bloque para ver sus residencias.')
+      );
+      root.appendChild(plan); return root;
+    }
+
+    if(appState.selBlock&&appState.selRoom==null){
+      var b=appState.selBlock; var rooms=[]; for(var i=b.from;i<=b.to;i++) rooms.push(i);
+      var data=getUserData();
+      function roomOverall(n){ var r=data[n]||{}; return (r.overall&&r.overall!=="auto")?r.overall:autoOverallFromRoom(r) }
+      var filtered=rooms.filter(function(n){
+        if(appState.filter&&String(n).indexOf(appState.filter.trim())<0) return false;
+        if(appState.statusFilter==="all") return true;
+        return roomOverall(n)===appState.statusFilter;
+      });
+      var main=el('main',{class:'container'},
+        el('h2',null,'Bloque '+b.label),
+        (function(){
+          var tb=el('div',{style:{display:'flex',gap:'8px',flexWrap:'wrap',margin:'8px 0'}});
+          var inp=el('input',{placeholder:'Filtrar número…'});
+          inp.addEventListener('input',function(){ appState.filter=inp.value; render() });
+          tb.appendChild(inp);
+          ['all','fail','pending','ok','none'].forEach(function(s){
+            var btn=el('span',{class:'badge'+(appState.statusFilter===s?' active':''),onclick:function(){ appState.statusFilter=s; render() }},s);
+            tb.appendChild(btn);
+          });
+          return tb;
+        })(),
+        el('div',{class:'rooms'}, filtered.map(function(n){ return RoomChip(n) }) )
+      );
+      root.appendChild(main); return root;
+    }
+
+    if(appState.selRoom!=null){
+      var n=appState.selRoom;
+      var data=getUserData();
+      var r=data[n]||{items:{},itemNotes:{},notes:"",measures:[],overall:"none",assumeOk:false};
+      var overall=(r.overall&&r.overall!=="auto")?r.overall:autoOverallFromRoom(r);
+
+      function resetRoom(){
+        setUserData(function(s){
+          var next=Object.assign({},s);
+          next[n]={items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false};
+          return next;
+        })
+      }
+      function toggleAssumeOk(){
+        setUserData(function(s){
+          var rr=s[n]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false};
+          rr.assumeOk=!rr.assumeOk;
+          var next=Object.assign({},s); next[n]=rr; return next;
+        })
+      }
+      function setOverallState(val){
+        setUserData(function(s){
+          var rr=s[n]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false};
+          rr.overall=val;
+          var next=Object.assign({},s); next[n]=rr; return next;
+        })
+      }
+      function setNotes(val){
+        setUserData(function(s){
+          var rr=s[n]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false};
+          rr.notes=val;
+          var next=Object.assign({},s); next[n]=rr; return next;
+        })
+      }
+      function hideSolved(){
+        setUserData(function(s){
+          var rr=s[n]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false};
+          rr.hideSolvedMark=true;
+          var next=Object.assign({},s); next[n]=rr; return next;
+        })
+      }
+
+      var main=el('main',{class:'container'},
+        el('div',{style:{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}},
+          el('h2',null,'Residencia ',String(n)),
+          el('span',{class:'badge',style:{marginLeft:'auto',background:overall==="auto"?"#334155":(overall==="ok"?'#10b981':overall==="fail"?'#ef4444':overall==="pending"?'#f59e0b':'#e5e7eb'),color:"#fff"}},labelState(overall)),
+          el('button',{class:'btn',onclick:toggleAssumeOk},r.assumeOk?'Asumir resto OK: Sí':'Asumir resto OK: No'),
+          hasRecentSolvedMark(n)?el('button',{class:'btn',onclick:hideSolved},'Ocultar marca'):null,
+          el('button',{class:'btn-danger',onclick:resetRoom},'Reiniciar habitación')
+        ),
+        IncidenciasView(n),
+        el('section',{class:'card'},
+          el('h3',null,'Medidas para sustituciones'),
+          MeasureForm(n),
+          (function(){
+            var list=el('ul',{style:{marginTop:'8px',paddingLeft:'18px'}});
+            var arr=(r.measures||[]);
+            if(!arr.length){ list.appendChild(el('li',{class:'kv'},'Sin medidas aún.')); return list }
+            arr.forEach(function(m,idx){
+              var li=el('li',{style:{marginBottom:'4px'}},
+                el('span',{style:{fontFamily:'monospace'}},'['+m.tipo+'] '+m.medida),
+                m.detalle?el('span',null,' — '+m.detalle):null,
+                el('button',{class:'btn',style:{marginLeft:'8px'},onclick:function(){
+                  setUserData(function(s){
+                    var rr=s[n]||{items:{},itemNotes:{},notes:"",measures:[],overall:"auto",assumeOk:false};
+                    rr.measures=(rr.measures||[]).filter(function(_,_i){return _i!==idx});
+                    var next=Object.assign({},s); next[n]=rr; return next;
+                  })
+                }},'Eliminar')
+              );
+              list.appendChild(li);
+            });
+            return list;
+          })()
+        ),
+        el('section',{class:'card'}, el('h3',null,'Observaciones'),
+          (function(){
+            var ta=el('textarea',{style:{width:'100%',minHeight:'90px'}});
+            ta.value=r.notes||"";
+            ta.addEventListener('input',function(){ setNotes(ta.value) });
+            return ta;
+          })()
+        ),
+        el('section',{class:'container',style:{paddingLeft:0}},
+          el('span',null,'Estado global: '),
+          ['ok','fail','pending','auto'].map(function(s){
+            var btn=el('span',{class:'badge',onclick:function(){ setOverallState(s) }},labelState(s));
+            return btn;
+          })
+        ),
+        el('footer',{class:'container kv'},APP_VERSION)
+      );
+      root.appendChild(main); return root;
+    }
+
+    return root;
+  }
+
+  // --- Render
+  function render(){
+    try{
+      var root=document.getElementById('app'); if(!root) return;
+      root.innerHTML=''; root.appendChild(MainView());
+      if(overlay) overlay.classList.add('hidden');
+    }catch(e){
+      if(overlay){
+        try{ overlay.classList.remove('hidden'); if(errlog) errlog.textContent=(e&&(e.stack||e.message||e.toString()))||String(e) }catch(_){}
+      }
+    }
+  }
+
+  // --- Inicio
+  applyRoute(); render(); window.addEventListener('hashchange',applyRoute);
 })();
