@@ -1,8 +1,8 @@
 // js/state.js
 
-import { loadUsers, loadCurrentUser, setCurrent, saveUsers, loadUserData, saveUserData, nsKey } from './storage.js';
+import { loadUsers, loadCurrentUser, setCurrent, saveUsers, loadUserData, saveUserData } from './storage.js';
 import { handleRegister, handleLogin } from './auth.js';
-import { BLOQUES, blockOfRoom, checkById } from './utils.js';
+import { BLOQUES, blockOfRoom, checkById, autoOverallFromRoom } from './utils.js';
 
 let _state = {
     page: "plan",
@@ -13,7 +13,7 @@ let _state = {
     users: {},
     currentUser: null,
     dataByUser: {},
-    trabajosFilter: { range:'hoy', block:'all', room:'', accion:'all', elemento:'all', onlySolved:false } // Añadido filtro de trabajos
+    trabajosFilter: { range:'hoy', block:'all', room:'', accion:'all', elemento:'all', onlySolved:false } // Filtros de historial
 };
 
 let _listeners = [];
@@ -57,7 +57,7 @@ export function setUserData(updater){
     const k=_state.currentUser ? _state.currentUser.toLowerCase() : null;
     if(!k) return;
     const currentData = getUserData();
-    const nextData = updater(Object.assign({}, currentData)); // Clona currentData para mutar sobre ella
+    const nextData = updater(Object.assign({}, currentData)); // Clona currentData
 
     // Asegurar que _jobs exista en el objeto mutado
     if (!nextData._jobs) nextData._jobs = currentData._jobs||[];
@@ -71,8 +71,8 @@ export async function login(alias, pin) {
     const user = await handleLogin(alias, pin, _state.users);
     if (user) {
         _state.currentUser = user.alias.toLowerCase();
-        setCurrent(user.alias.toLowerCase());
-        _state.users[user.alias.toLowerCase()] = user;
+        setCurrent(_state.currentUser);
+        _state.users[_state.currentUser] = user;
         getUserData();
         setRouteTo(null, null); // Navegar a 'plan'
         notifyStateChange();
@@ -84,8 +84,8 @@ export async function register(alias, pin) {
     const user = await handleRegister(alias, pin, _state.users);
     if (user) {
         _state.currentUser = user.alias.toLowerCase();
-        setCurrent(user.alias.toLowerCase());
-        _state.users[user.alias.toLowerCase()] = user;
+        setCurrent(_state.currentUser);
+        _state.users[_state.currentUser] = user;
         saveUsers(_state.users);
         getUserData();
         setRouteTo(null, null);
@@ -171,7 +171,6 @@ export function applyRoute() {
         }
     } else { _state.selBlock = null; _state.selRoom = null; }
 
-    // Recargar datos de usuario si se acaba de autenticar
     if (!needsAuth && !_state.dataByUser[_state.currentUser.toLowerCase()]) getUserData();
 
     notifyStateChange();
