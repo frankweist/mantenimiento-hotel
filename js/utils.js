@@ -26,6 +26,7 @@ export const CHECKS = [
     { id: "desperfectos", label: "Desperfectos" },
 ];
 
+// Colores definidos para el nuevo diseño del Plan
 export const COLORS = { none:"#e5e7eb", review:"#f59e0b", ok:"#10b981", fail:"#ef4444", dark:"#0f172a", white:"#ffffff", border:"#cbd5e1" };
 
 // --- Hashing (Añadido para resolver el error 'hashPIN not defined') ---
@@ -40,14 +41,16 @@ export function hashPIN(pin) {
     return String(hash);
 }
 
-
 // --- DOM Helper (el) ---
 export function el(tag, attrs){
     var e=document.createElement(tag);
     if(attrs){
         for (var k in attrs){
             if (k==="class") e.className = attrs[k];
-            else if (k==="style"){ for (var sk in attrs[k]) e.style[sk]=attrs[k][sk]; }
+            else if (k==="style"){ 
+                // Aplicar estilos en línea del objeto
+                for (var sk in attrs[k]) e.style[sk]=attrs[k][sk]; 
+            }
             // CRUCIAL para CSP: la función de evento debe ser una función, no un string
             else if (k.slice(0,2)==="on" && typeof attrs[k]==="function"){ e.addEventListener(k.slice(2).toLowerCase(), attrs[k]); }
             else if (attrs[k]!==undefined && attrs[k]!==null){ e.setAttribute(k, attrs[k]); }
