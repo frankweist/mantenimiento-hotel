@@ -55,7 +55,7 @@ function render(state) {
             mainContent.appendChild(TrabajosView());
             break;
         case "cuenta":
-            // Asumimos que la vista de Cuenta se manejará aquí
+            // Vista de Cuenta no implementada, queda como placeholder
             mainContent.textContent = 'Vista de Cuenta no implementada.'; 
             break;
         default:
