@@ -1,6 +1,6 @@
 // js/utils.js
 
-export const APP_VERSION = "v1.5.0-mejorado";
+export const APP_VERSION = "v1.5.0-modular";
 export const SOLVED_WINDOW_MS = 48*60*60*1000; // 48h
 
 export const BLOQUES = [
@@ -28,6 +28,19 @@ export const CHECKS = [
 
 export const COLORS = { none:"#e5e7eb", review:"#f59e0b", ok:"#10b981", fail:"#ef4444", dark:"#0f172a", white:"#ffffff", border:"#cbd5e1" };
 
+// --- Hashing (Añadido para resolver el error 'hashPIN not defined') ---
+export function hashPIN(pin) {
+    if (!pin || typeof pin !== 'string') return '';
+    var hash = 0;
+    for (var i = 0; i < pin.length; i++) {
+        var char = pin.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash |= 0; // Convertir a entero de 32bit
+    }
+    return String(hash);
+}
+
+
 // --- DOM Helper (el) ---
 export function el(tag, attrs){
     var e=document.createElement(tag);
@@ -35,6 +48,7 @@ export function el(tag, attrs){
         for (var k in attrs){
             if (k==="class") e.className = attrs[k];
             else if (k==="style"){ for (var sk in attrs[k]) e.style[sk]=attrs[k][sk]; }
+            // CRUCIAL para CSP: la función de evento debe ser una función, no un string
             else if (k.slice(0,2)==="on" && typeof attrs[k]==="function"){ e.addEventListener(k.slice(2).toLowerCase(), attrs[k]); }
             else if (attrs[k]!==undefined && attrs[k]!==null){ e.setAttribute(k, attrs[k]); }
         }
