@@ -1,22 +1,38 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Mantenimiento Hotel</title>
-  <style>
-    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto;background:#f8fafc;color:#0f172a}
-    .container{max-width:1100px;margin:0 auto;padding:12px}
-    .card{background:#fff;border:1px solid #cbd5e1;border-radius:12px;padding:12px}
-    .btn{border:1px solid #cbd5e1;background:#fff;padding:8px 12px;border-radius:10px;cursor:pointer}
-  </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mantenimiento Hotel · Residences</title>
+  <link rel="icon" type="image/x-icon" href="./favicon.ico">
+  <link rel="stylesheet" href="./styles.css" />
+  <meta name="theme-color" content="#0a4077">
 </head>
 <body>
   <div id="app"></div>
-  <div id="error-overlay" style="display:none;position:fixed;inset:0;background:rgba(255,255,255,.96);z-index:9999;padding:16px;overflow:auto">
-    <h3>La app ha fallado</h3>
-    <pre id="errlog" style="white-space:pre-wrap"></pre>
+
+  <!-- Modal reutilizable -->
+  <div id="modal" class="hidden modal-backdrop">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modal-title">Modal</h3>
+        <button id="modal-close" class="btn">✕</button>
+      </div>
+      <div id="modal-body"></div>
+      <div class="modal-footer">
+        <button id="modal-cancel" class="btn">Cancelar</button>
+        <button id="modal-ok" class="btn-primary">Guardar</button>
+      </div>
+    </div>
   </div>
-  <script src="./app.js?v=boot-clean"></script>
+
+  <!-- Overlay de errores para evitar pantalla en blanco -->
+  <div id="error-overlay" class="hidden">
+    <h3>La app ha fallado</h3>
+    <pre id="errlog">(sin detalles)</pre>
+    <button id="reload-btn">Recargar</button>
+  </div>
+
+  <script src="./app.js?v=1.4.2-stable2"></script>
 </body>
 </html>
