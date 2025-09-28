@@ -1,6 +1,8 @@
+// js/state.js
+
 import { loadUsers, loadCurrentUser, setCurrent, saveUsers, loadUserData, saveUserData, nsKey } from './storage.js';
 import { handleRegister, handleLogin } from './auth.js';
-import { BLOQUES } from './utils.js';
+import { BLOQUES, blockOfRoom, checkById } from './utils.js';
 
 let _state = {
     page: "plan",
@@ -10,7 +12,8 @@ let _state = {
     statusFilter: "all",
     users: {},
     currentUser: null,
-    dataByUser: {}
+    dataByUser: {},
+    trabajosFilter: { range:'hoy', block:'all', room:'', accion:'all', elemento:'all', onlySolved:false } // Añadido filtro de trabajos
 };
 
 let _listeners = [];
@@ -26,6 +29,7 @@ function notifyStateChange() {
     _listeners.forEach(listener => listener(_state));
 }
 
+// --- Initial Load ---
 export function loadInitialState() {
     _state.users = loadUsers();
     _state.currentUser = loadCurrentUser();
@@ -36,64 +40,101 @@ export function loadInitialState() {
 }
 
 // --- User & Auth Management ---
-export async function login(alias, pin) {
-    const user = await handleLogin(alias, pin, _state.users);
-    if (user) {
-        _state.currentUser = user.alias;
-        setCurrent(user.alias);
-        getUserData();
-        setRouteTo(null, null); // Redirigir al plano
-    } else {
-        alert("Alias o PIN incorrecto.");
+export function getUserProfile(){ return _state.currentUser ? _state.users[_state.currentUser.toLowerCase()] : null; }
+export function getUserData(){
+    const k=_state.currentUser ? _state.currentUser.toLowerCase() : null;
+    if(!k) return {};
+    if(!_state.dataByUser[k]){
+      // Usar la función de storage para cargar
+      _state.dataByUser[k]= loadUserData(k);
+      if (!_state.dataByUser[k]._jobs) _state.dataByUser[k]._jobs=[];
     }
-}
-
-export async function register(alias, pin) {
-    const { users, user } = await handleRegister(alias, pin, _state.users);
-    if (user) {
-        _state.users = users;
-        saveUsers(users);
-        alert("Usuario registrado con éxito. Ahora puedes iniciar sesión.");
-        notifyStateChange();
-    } else {
-        alert("El alias ya existe.");
-    }
-}
-
-export function logout() {
-    _state.currentUser = null;
-    setCurrent(null);
-    _state.dataByUser = {};
-    applyRoute(); // Vuelve a la vista de autenticación
-}
-
-
-// --- User Data Management ---
-export function getUserProfile() {
-    return _state.currentUser ? _state.users[_state.currentUser.toLowerCase()] : null;
-}
-
-export function getUserData() {
-    const k = _state.currentUser;
-    if (!k) return {};
-    if (!_state.dataByUser[k]) {
-        _state.dataByUser[k] = loadUserData(k);
-    }
-    if (!_state.dataByUser[k]._jobs) _state.dataByUser[k]._jobs = [];
+    if (!_state.dataByUser[k]._jobs) _state.dataByUser[k]._jobs=[];
     return _state.dataByUser[k];
 }
 
-export function setUserData(updater) {
-    const k = _state.currentUser;
-    if (!k) return;
+export function setUserData(updater){
+    const k=_state.currentUser ? _state.currentUser.toLowerCase() : null;
+    if(!k) return;
     const currentData = getUserData();
-    const nextData = updater(currentData);
+    const nextData = updater(Object.assign({}, currentData)); // Clona currentData para mutar sobre ella
+
+    // Asegurar que _jobs exista en el objeto mutado
+    if (!nextData._jobs) nextData._jobs = currentData._jobs||[];
 
     _state.dataByUser[k] = nextData;
     saveUserData(k, nextData);
     notifyStateChange();
 }
 
+export async function login(alias, pin) {
+    const user = await handleLogin(alias, pin, _state.users);
+    if (user) {
+        _state.currentUser = user.alias.toLowerCase();
+        setCurrent(user.alias.toLowerCase());
+        _state.users[user.alias.toLowerCase()] = user;
+        getUserData();
+        setRouteTo(null, null); // Navegar a 'plan'
+        notifyStateChange();
+    }
+    return user;
+}
+
+export async function register(alias, pin) {
+    const user = await handleRegister(alias, pin, _state.users);
+    if (user) {
+        _state.currentUser = user.alias.toLowerCase();
+        setCurrent(user.alias.toLowerCase());
+        _state.users[user.alias.toLowerCase()] = user;
+        saveUsers(_state.users);
+        getUserData();
+        setRouteTo(null, null);
+        notifyStateChange();
+    }
+    return user;
+}
+
+export function logout(){
+    setCurrent(null);
+    _state.currentUser = null;
+    _state.dataByUser = {};
+    setRouteTo("auth");
+    notifyStateChange();
+}
+
+
+// --- Jobs Management (Lógica de negocio) ---
+function genId(){ return 'j'+Math.random().toString(36).slice(2)+Date.now().toString(36); }
+export function jobs(){ return (getUserData()._jobs)||[]; }
+function pushJob(job){
+    setUserData(function(s){
+      var arr = (s._jobs||[]).slice(); arr.push(job);
+      return Object.assign({}, s, {_jobs:arr});
+    });
+}
+export function logJob(opts){
+    const profile = getUserProfile();
+    const alias=(profile&&profile.alias)||'anon';
+    const j = {
+        id: genId(),
+        ts: new Date().toISOString(),
+        alias: alias,
+        bloque: blockOfRoom(opts.room),
+        room: opts.room,
+        elementoId: opts.elementoId || null,
+        elemento: opts.elemento || (opts.elementoId? (checkById(opts.elementoId)||{label:opts.elementoId}).label : (opts.elementoTexto||"")),
+        accion: opts.accion || "reparación",
+        estadoAntes: opts.estadoAntes || null,
+        estadoDespues: opts.estadoDespues || null,
+        minutos: opts.minutos || null,
+        materiales: opts.materiales || null,
+        notas: opts.notas || null,
+        source: opts.source || "item",
+        anulado: false
+    };
+    pushJob(j);
+    return j;
+}
 
 // --- Routing ---
 function parseHash() {
@@ -123,16 +164,26 @@ export function applyRoute() {
 
     _state.page = needsAuth ? "auth" : r.page;
     if (_state.page === "plan" && !needsAuth) {
-        if (!r.block) {
-            _state.selBlock = null;
-            _state.selRoom = null;
-        } else {
-            _state.selBlock = BLOQUES.find(b => b.id === r.block) || null;
-            _state.selRoom = r.room || null;
+        if (!r.block) { _state.selBlock = null; _state.selRoom = null; }
+        else {
+            const b = BLOQUES.find(x => x.id === r.block);
+            _state.selBlock = b || null; _state.selRoom = r.room || null;
         }
-    } else {
-        _state.selBlock = null;
-        _state.selRoom = null;
-    }
+    } else { _state.selBlock = null; _state.selRoom = null; }
+
+    // Recargar datos de usuario si se acaba de autenticar
+    if (!needsAuth && !_state.dataByUser[_state.currentUser.toLowerCase()]) getUserData();
+
+    notifyStateChange();
+}
+
+// --- Filters Management ---
+export function setBlockFilter(key, value){
+    _state[key] = value;
+    notifyStateChange();
+}
+
+export function setTrabajosFilter(key, value){
+    _state.trabajosFilter = Object.assign({}, _state.trabajosFilter, {[key]: value});
     notifyStateChange();
 }
