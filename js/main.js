@@ -1,3 +1,13 @@
+// js/main.js
+import { getState, onStateChange, loadInitialState, applyRoute } from './state.js';
+import { Header, AuthView, PlanView, ParteView, TrabajosView } from './views.js';
+// CORRECCIÓN: Importar 'el' de utils.js
+import { el } from './utils.js'; // <-- Línea añadida para solucionar el ReferenceError
+
+// --- Global Utils & Safe Boot ---
+const overlay = document.getElementById('error-overlay');
+// ... (resto del archivo sin cambios)
+
 import { getState, onStateChange, loadInitialState, applyRoute } from './state.js';
 import { Header, AuthView, PlanView, ParteView, TrabajosView } from './views.js';
 
@@ -72,4 +82,5 @@ function init() {
 }
 
 // Iniciar la aplicación
+
 init();
