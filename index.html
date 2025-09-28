@@ -1,38 +1,39 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Mantenimiento Hotel · Residences</title>
-  <link rel="icon" type="image/x-icon" href="./favicon.ico">
-  <link rel="stylesheet" href="./styles.css" />
-  <meta name="theme-color" content="#0a4077">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mantenimiento Hotel | Residences</title>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div id="app"></div>
 
-  <!-- Modal reutilizable -->
-  <div id="modal" class="hidden modal-backdrop">
-    <div class="modal">
-      <div class="modal-header">
-        <h3 id="modal-title">Modal</h3>
-        <button id="modal-close" class="btn">✕</button>
-      </div>
-      <div id="modal-body"></div>
-      <div class="modal-footer">
-        <button id="modal-cancel" class="btn">Cancelar</button>
-        <button id="modal-ok" class="btn-primary">Guardar</button>
-      </div>
+    <div id="app">
+        </div>
+
+    <div id="modal" class="modal hidden">
+        <div class="modal-content">
+            <button id="modal-close" class="modal-close-btn">&times;</button>
+            <h3 id="modal-title">Título del Modal</h3>
+            <div id="modal-body">
+                </div>
+            <div class="modal-actions">
+                <button id="modal-cancel" class="btn-light">Cancelar</button>
+                <button id="modal-ok" class="btn-primary">Aceptar</button>
+            </div>
+        </div>
     </div>
-  </div>
 
-  <!-- Overlay de errores para evitar pantalla en blanco -->
-  <div id="error-overlay" class="hidden">
-    <h3>La app ha fallado</h3>
-    <pre id="errlog">(sin detalles)</pre>
-    <button id="reload-btn">Recargar</button>
-  </div>
+    <div id="error-overlay" class="error-overlay hidden">
+        <div class="error-box">
+            <h3>⚠️ Error Crítico de la Aplicación</h3>
+            <p>Ha ocurrido un error inesperado que impide el correcto funcionamiento. Intenta recargar la aplicación.</p>
+            <pre id="errlog"></pre>
+            <button id="reload-btn" class="btn-primary">Recargar</button>
+        </div>
+    </div>
 
-  <script src="./app.js?v=1.4.2-stable2"></script>
+    <script src="app.js"></script>
+
 </body>
 </html>
