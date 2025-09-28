@@ -2,7 +2,7 @@
 import { getState, onStateChange, loadInitialState, applyRoute } from './state.js';
 import { Header, AuthView, PlanView, ParteView, TrabajosView } from './views.js';
 // CORRECCIÓN: Importar 'el' de utils.js para resolver el ReferenceError
-import { el } from './utils.js';
+import { el } from './utils.js'; 
 
 // --- Global Utils & Safe Boot ---
 const overlay = document.getElementById('error-overlay');
@@ -16,7 +16,7 @@ function showError(e) {
         const message = (e && (e.stack || e.message || e.toString())) || String(e);
         if (errlog) errlog.textContent = message;
         console.error("Application Error:", message);
-        // Ocultar overlay al recargar, si no es un error persistente
+        // Mostrar alerta en caso de error crítico
         if (!overlay.classList.contains('hidden')) {
              alert("Error crítico en la aplicación. Revisa la consola o recarga.\n" + message.substring(0, 100));
         }
@@ -34,14 +34,12 @@ function render(state) {
     if (!app) return;
     app.innerHTML = ''; // Limpiar la app en cada renderizado
 
-    // Renderizar Header (siempre que no estemos en la vista de autenticación)
+    // Renderizar Header (navegación)
     if (state.page !== "auth") {
-        // Asegúrese de que Header reciba el helper 'el' si lo necesita
         app.appendChild(Header(state)); 
     }
 
-    // Renderizar la página actual
-    // CORRECCIÓN: Usar 'el' de la importación
+    // Renderizar el contenido principal
     const mainContent = el('main', { class: 'container' }); 
     switch (state.page) {
         case "auth":
@@ -57,7 +55,8 @@ function render(state) {
             mainContent.appendChild(TrabajosView());
             break;
         case "cuenta":
-            mainContent.appendChild(AccountView());
+            // Asumimos que la vista de Cuenta se manejará aquí
+            mainContent.textContent = 'Vista de Cuenta no implementada.'; 
             break;
         default:
             mainContent.textContent = 'Página no encontrada.';
@@ -73,7 +72,7 @@ function init() {
     // Suscribirse a los cambios de estado para volver a renderizar
     onStateChange(render);
 
-    // Cargar estado inicial (usuarios, etc.)
+    // Cargar estado inicial (usuarios, datos)
     loadInitialState();
 
     // Aplicar la ruta inicial (basada en el hash de la URL)
